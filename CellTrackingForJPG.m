@@ -1,4 +1,4 @@
-I = imread('cellphoto.jpg');
+I = imread('cellphoto-nocell.png');
 figure,imshow(I),title('Original Image');
 text(size(I,2),size(I,1)+15, ...
     'Image of Cells', ...
@@ -31,10 +31,10 @@ BWdfill = imfill(BWsdil,'holes');
 BWnobord = imclearborder(BWdfill,4);
 % figure,imshow(BWnobord),title('Cleared Border Image');
 
-%最后，为了使分割后的对象看起来自然，用菱形结构元素对图像腐蚀9次来平滑处理对象。使用 strel 函数创建菱形结构元素。
+%最后，为了使分割后的对象看起来自然，用菱形结构元素对图像腐蚀10次来平滑处理对象。使用 strel 函数创建菱形结构元素。
 seD = strel('diamond',1);
 BWfinal = imerode(BWnobord,seD);
-for i=2:9
+for i=2:10
     BWfinal = imerode(BWfinal,seD);
 end
 CC = bwconncomp(BWfinal);
@@ -82,8 +82,6 @@ for i = 1:length(stats)
 end
 
 fclose(fid);
-
-
 
 %保存分割后的细胞
 processingFolder = 'processing';
