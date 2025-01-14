@@ -1,13 +1,18 @@
 Org = imread('Cellphoto.jpg');
 % figure,imshow(Org),title('Original Image');
-text(size(I,2),size(I,1)+15, ...
+text(size(Org,2),size(Org,1)+15, ...
     'Image of Cells', ...
     'FontSize',7,'HorizontalAlignment','right');
-text(size(I,2),size(I,1)+25, ...
+text(size(Org,2),size(Org,1)+25, ...
     'SUSTech', ...
     'FontSize',7,'HorizontalAlignment','right');
 
 hh = 2;
+% Save the extended circles image
+processingFolder = 'processing';
+if ~exist(processingFolder, 'dir')
+    mkdir(processingFolder);
+end
 
 GrayImage = rgb2gray(Org);
 % figure,imshow(GrayImage),title('Gray Image');
@@ -146,11 +151,7 @@ for i=1:NUM
     end
 end
 
-% Save the extended circles image
-processingFolder = 'processing';
-if ~exist(processingFolder, 'dir')
-    mkdir(processingFolder);
-end
+
 imageFileName = fullfile(processingFolder, sprintf('1-GrayImage.png'));
 imwrite(GrayImage, imageFileName);
 imageFileName = fullfile(processingFolder, sprintf('2-DenoisedImage.png'));
