@@ -1,0 +1,7 @@
+MATLAB version
+With savings Tavg = 2.324 s
+Without savings Tavg = 1.08 s
+
+Python version
+With savings Tavg = 1.42 s
+Without savings Tavg = 0.94 s
