@@ -31,8 +31,13 @@ def process_image(image_path):
     cv2.imwrite(os.path.join(processing_folder, '2-DenoisedImage.png'), (denoised_image * 255).astype(np.uint8))
 
     # Binary image
-    _, binary_image = cv2.threshold(org[:,:,2], 0, 255, 
-                                  cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    binary_image1 = cv2.adaptiveThreshold(org[:,:,2], 255, 
+                                       cv2.ADAPTIVE_THRESH_MEAN_C,
+                                       cv2.THRESH_BINARY, 11, 2)
+    binary_image2 = cv2.adaptiveThreshold(org[:,:,2], 255, 
+                                       cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                       cv2.THRESH_BINARY, 11, 2)
+    binary_image = binary_image1 | binary_image2
     binary_image = ~binary_image
     cv2.imwrite(os.path.join(processing_folder, '3-BinaryImage.png'), binary_image)
 
@@ -128,10 +133,24 @@ def process_image(image_path):
     cv2.imwrite(os.path.join(processing_folder, '11-ROIedgeORI9ORBinary.png'), 
                 roi_seg.astype(np.uint8) * 255)
 
-    # Final processing
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    final_seg = cv2.morphologyEx(roi_seg.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
-    final_seg = morphology.remove_small_objects(final_seg.astype(bool))
+    # Pre-processing to reduce noise - using gentler parameters
+    # 1. Remove only very tiny objects
+    roi_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=15)
+    
+    # 2. Use a small kernel to clean up noise, but with less aggressive opening
+    small_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    roi_seg = cv2.morphologyEx(roi_seg.astype(np.uint8), cv2.MORPH_OPEN, small_kernel)
+    
+    cv2.imwrite(os.path.join(processing_folder, '11b-PreProcessed.png'), 
+                roi_seg.astype(np.uint8) * 255)
+
+    # Final processing with adjusted parameters
+    # Use moderate kernel for closing
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    final_seg = cv2.morphologyEx(roi_seg.astype(np.uint8), cv2.MORPH_CLOSE, kernel, iterations=2)
+    
+    # Remove small objects with moderate threshold
+    final_seg = morphology.remove_small_objects(final_seg.astype(bool), min_size=20)
     cv2.imwrite(os.path.join(processing_folder, '12-ClosingAndRemove.png'), 
                 final_seg.astype(np.uint8) * 255)
 
@@ -150,14 +169,33 @@ def process_image(image_path):
     cv2.imwrite(os.path.join(processing_folder, '15-SpursRemoved.png'), 
                 final_seg.astype(np.uint8) * 255)
 
-    final_seg = morphology.remove_small_objects(final_seg, min_size=1)
+    # Additional cleaning steps to remove spider-web like noise
+    # 1. Use area opening to remove small objects
+    final_seg = morphology.remove_small_objects(final_seg, min_size=20)
+    
+    # 2. Remove thin connections using area closing
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    final_seg = cv2.morphologyEx(final_seg.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    
+    # 3. Calculate and filter based on eccentricity to remove elongated objects
+    labeled = measure.label(final_seg)
+    props = measure.regionprops(labeled)
+    mask = np.zeros_like(final_seg, dtype=bool)
+    
+    for prop in props:
+        # Filter based on eccentricity and area
+        if prop.eccentricity < 0.95 and prop.area > 300:  # Less elongated objects
+            mask[labeled == prop.label] = True
+    
+    final_seg = mask
+    
     cv2.imwrite(os.path.join(processing_folder, '16-Cleaned.png'), 
                 final_seg.astype(np.uint8) * 255)
 
     # Label connected components
     labeled_image = measure.label(final_seg)
     rgb_label = segmentation.mark_boundaries(org_rgb, labeled_image)
-    # plt.imsave(os.path.join(processing_folder, '17-Labelled.png'), rgb_label)
+    plt.imsave(os.path.join(processing_folder, '17-Labelled.png'), rgb_label)
 
     cv2.imwrite(os.path.join(processing_folder, '18-L_BW.png'), 
                 (labeled_image > 0).astype(np.uint8) * 255)
@@ -165,6 +203,39 @@ def process_image(image_path):
     # Calculate properties and draw rectangles
     props = measure.regionprops(labeled_image)
     
+    # Create a figure to show all parameters before filtering
+    plt.figure(figsize=(12, 8))
+    plt.imshow(cv2.cvtColor(org, cv2.COLOR_BGR2RGB))
+    
+    for prop in props:
+        area = prop.area
+        perimeter = prop.perimeter
+        circularity = (perimeter * perimeter) / (4 * np.pi * area)
+        
+        # Get centroid for text placement
+        centroid = prop.centroid
+        
+        # Draw text with parameter values
+        plt.text(centroid[1], centroid[0], 
+                f'A:{area:.0f}\nP:{perimeter:.0f}\nC:{circularity:.2f}',
+                color='yellow', fontsize=8, ha='center', va='center',
+                bbox=dict(facecolor='black', alpha=0.7, edgecolor='none', pad=1))
+        
+        # Draw bounding box for all objects
+        bbox = prop.bbox
+        height = bbox[2] - bbox[0]
+        width = bbox[3] - bbox[1]
+        rect = plt.Rectangle((bbox[1], bbox[0]), width, height,
+                           fill=False, edgecolor='yellow')
+        plt.gca().add_patch(rect)
+    
+    plt.axis('off')
+    plt.title('Objects with Area(A), Perimeter(P), and Circularity(C) values')
+    plt.savefig(os.path.join(processing_folder, '18.5-Parameters.png'), 
+                bbox_inches='tight', dpi=300)
+    plt.close()
+    
+    # Original visualization with filtering
     plt.figure()
     plt.imshow(cv2.cvtColor(org, cv2.COLOR_BGR2RGB))
     
@@ -173,9 +244,9 @@ def process_image(image_path):
         perimeter = prop.perimeter
         circularity = (perimeter * perimeter) / (4 * np.pi * area)
         
-        if (50 < area < 4000 and 
-            50 < perimeter < 300 and 
-            0.8 < circularity < 1.8):
+        if (1000 < area < 8000 and 
+            300 < perimeter < 800 and 
+            0.8 < circularity < 12):
             
             bbox = prop.bbox
             height = bbox[2] - bbox[0]
@@ -205,7 +276,7 @@ if __name__ == "__main__":
     
     for i in range(n_runs):
         print(f"\nRun {i+1}/{n_runs}")
-        time_taken = process_image('test4.png')
+        time_taken = process_image('test5.png')
         times.append(time_taken)
     
     avg_time = sum(times) / len(times)
