@@ -26,6 +26,28 @@ class UnifiedUI:
         # Flag for quitting
         self.quit_flag = False
         
+        # Create buttons frame
+        buttons_frame = ttk.Frame(self.root)
+        buttons_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Add parameter analysis snapshot button
+        param_snapshot_frame = ttk.LabelFrame(buttons_frame, text="Parameter Analysis")
+        param_snapshot_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Button(param_snapshot_frame, text="Take Snapshot for Parameter Analysis",
+                  command=self.take_param_snapshot).pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(param_snapshot_frame, 
+                 text="(Opens analysis window to calculate optimal parameters)",
+                 wraplength=350, justify=tk.CENTER).pack(pady=(0,5))
+        
+        # Add processing steps snapshot button
+        process_snapshot_frame = ttk.LabelFrame(buttons_frame, text="Processing Steps")
+        process_snapshot_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Button(process_snapshot_frame, text="Save Processing Steps Snapshot",
+                  command=self.take_process_snapshot).pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(process_snapshot_frame, 
+                 text="(Saves all intermediate processing steps to 'cam-process' folder)",
+                 wraplength=350, justify=tk.CENTER).pack(pady=(0,5))
+        
         # Initialize parameters with default values
         self._parameters = {
             'area': (50, 4000),
@@ -54,6 +76,9 @@ class UnifiedUI:
         # Create frames
         self.create_parameter_frame()
         self.create_video_frames()
+        
+        # Variable to store the current frame
+        self.current_frame = None
         
         # Set up window close handlers
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -116,12 +141,6 @@ class UnifiedUI:
         button_frame = ttk.Frame(param_frame)
         button_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # Add snapshot button with description
-        ttk.Button(button_frame, text="Take Snapshot for Analysis",
-                  command=self.take_snapshot).pack(side=tk.TOP, pady=2, fill=tk.X)
-        ttk.Label(button_frame, text="(Opens analysis window to calculate optimal parameters)",
-                 wraplength=200, justify=tk.CENTER).pack(side=tk.TOP, pady=(0,5))
-        
         # Add update parameters button
         def update_parameters():
             try:
@@ -166,7 +185,7 @@ class UnifiedUI:
             return
             
         # Store current frame for snapshot
-        self.current_frame = frame1
+        self.set_current_frame(frame1)
         
         # Convert frames to PhotoImage
         frame1_rgb = cv2.cvtColor(frame1, cv2.COLOR_BGR2RGB)
@@ -192,25 +211,51 @@ class UnifiedUI:
         """Get the current parameter values"""
         return self._parameters
     
-    def take_snapshot(self):
-        """Capture and analyze current frame"""
-        # Get current frame and process it
-        if not hasattr(self, 'current_frame'):
-            messagebox.showwarning("No Frame", "No camera frame available")
-            return
+    def take_param_snapshot(self):
+        """Capture and analyze current frame for parameter adjustment"""
+        if self.current_frame is not None:
+            frame = self.current_frame.copy()
+            from cell_tracking_for_usbcam import process_frame
+            processed_frame = process_frame(frame, self.get_parameters())
             
-        # Process the frame
-        frame = self.current_frame.copy()
-        from cell_tracking_for_usbcam import process_frame
-        processed_frame = process_frame(frame, self.get_parameters())
-        
-        # Get region properties
-        final_seg = processed_frame[2]  # Get the segmentation mask
-        labeled = measure.label(final_seg)
-        regions = measure.regionprops(labeled)
-        
-        # Show analysis dialog
-        self.snapshot_analyzer.analyze_snapshot(frame, regions)
+            # Get enhanced image
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(10, 10))
+            enhanced = clahe.apply(gray)
+            enhanced_frame = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+            
+            final_seg = processed_frame[2]
+            labeled = measure.label(final_seg)
+            regions = measure.regionprops(labeled)
+            
+            self.snapshot_analyzer.analyze_snapshot(enhanced_frame, regions)
+        else:
+            messagebox.showwarning("No Frame", "No camera frame available")
+    
+    def take_process_snapshot(self):
+        """Take a snapshot and save all processing steps"""
+        if self.current_frame is not None:
+            import os
+            from cell_tracking_for_usbcam import process_frame_debug
+            
+            # Create cam-process directory if it doesn't exist
+            process_dir = 'cam-process'
+            if not os.path.exists(process_dir):
+                os.makedirs(process_dir)
+            
+            # Save original frame
+            cv2.imwrite(os.path.join(process_dir, '0-Original.png'), self.current_frame)
+            
+            # Process frame with debug output
+            process_frame_debug(self.current_frame, process_dir)
+            
+            messagebox.showinfo("Snapshot", "Processing steps saved in 'cam-process' folder")
+        else:
+            messagebox.showwarning("Snapshot", "No frame available")
+    
+    def set_current_frame(self, frame):
+        """Store the current frame for snapshot"""
+        self.current_frame = frame.copy() if frame is not None else None
     
     def update(self):
         """Update the tkinter windows"""

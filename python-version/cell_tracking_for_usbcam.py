@@ -4,9 +4,10 @@ from skimage import filters, morphology, measure, segmentation
 import sys
 import tkinter as tk
 from parameter_control import UnifiedUI
+import os
 
 # Global variables for cell tracking and persistence
-CAMERASELECTED = 0  # 0~infinity for USB camera index
+CAMERASELECTED = 1  # 0~infinity for USB camera index
 previous_cells = []  # List to store bounding boxes of previously detected cells
 cell_lifetimes = []  # List to track the remaining frames each cell will be displayed
 CELL_MEMORY_FRAMES = 5  # Number of frames to keep tracking a cell after it disappears
@@ -78,16 +79,86 @@ def non_max_suppression(boxes, scores, iou_threshold=0.2):
     
     return [boxes[i] for i in keep]
 
-def process_frame(frame, params):
+def process_frame(frame, params, clahe_clip_limit=2.5, clahe_tile_size=10): 
     """Process a frame to detect and track cells"""
     global previous_cells, cell_lifetimes
     
     # Convert frame to grayscale
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     
-    # Apply thresholding
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Enhance contrast using CLAHE
+    clahe = cv2.createCLAHE(clipLimit=clahe_clip_limit, tileGridSize=(clahe_tile_size, clahe_tile_size))
+    enhanced_image = clahe.apply(gray)
     
+    # Convert to float and apply Gaussian blur
+    float_image = enhanced_image.astype(np.float32) / 255.0
+    denoised_image = cv2.GaussianBlur(float_image, (3, 3), 2)
+    
+    # Kirsch operators for edge detection
+    kirsch_kernels = [
+        np.array([[5, 5, 5], [-3, 0, -3], [-3, -3, -3]], dtype=np.float32),
+        np.array([[5, 5, -3], [5, 0, -3], [-3, -3, -3]], dtype=np.float32),
+        np.array([[5, -3, -3], [5, 0, -3], [5, -3, -3]], dtype=np.float32),
+        np.array([[-3, -3, -3], [5, 0, -3], [5, 5, -3]], dtype=np.float32),
+        np.array([[-3, -3, -3], [-3, 0, -3], [5, 5, 5]], dtype=np.float32),
+        np.array([[-3, -3, -3], [-3, 0, 5], [-3, 5, 5]], dtype=np.float32),
+        np.array([[-3, -3, 5], [-3, 0, 5], [-3, -3, 5]], dtype=np.float32),
+        np.array([[-3, 5, 5], [-3, 0, 5], [-3, -3, -3]], dtype=np.float32)
+    ]
+
+    kirsch_outputs = []
+    for kernel in kirsch_kernels:
+        # Apply Kirsch filter (keeping float32)
+        filtered = cv2.filter2D(denoised_image, -1, kernel)
+        
+        # Convert to absolute values
+        filtered = np.abs(filtered)
+        
+        # Normalize to 0-1 range
+        filtered_min = np.min(filtered)
+        filtered_max = np.max(filtered)
+        if filtered_max > filtered_min:  # Avoid division by zero
+            filtered_norm = (filtered - filtered_min) / (filtered_max - filtered_min)
+        else:
+            filtered_norm = np.zeros_like(filtered)
+        
+        # Calculate Otsu threshold
+        binary = filtered_norm > filters.threshold_otsu(filtered_norm)
+        kirsch_outputs.append(binary)
+
+    # Combine all Kirsch outputs
+    binary = np.zeros_like(kirsch_outputs[0], dtype=bool)
+    for output in kirsch_outputs:
+        binary = binary | output
+    
+    # Convert to uint8 for contour detection
+    binary = binary.astype(np.uint8) * 255
+
+    # Remove small areas
+    binary = morphology.remove_small_objects(binary.astype(bool), min_size=100)
+
+    # Clean up - using less aggressive thinning
+    binary = morphology.thin(binary, max_num_iter=1)
+
+    # Additional cleaning steps to remove spider-web like noise while preserving cells
+    # 1. Use area opening with smaller threshold to preserve smaller cells
+    binary = morphology.remove_small_objects(binary, min_size=15)
+    
+    # 2. Remove thin connections using area closing with smaller kernel
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    binary = cv2.morphologyEx(binary.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    
+    # 3. Calculate and filter based on eccentricity with more lenient thresholds
+    labeled = measure.label(binary)
+    props = measure.regionprops(labeled)
+    mask = np.zeros_like(binary, dtype=bool)
+    
+    for prop in props:
+        if (prop.eccentricity < 0.98 and prop.area > 200) or (prop.area > 400):
+            mask[labeled == prop.label] = True
+    
+    binary = mask.astype(np.uint8) * 255
+
     # Find contours
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
@@ -171,7 +242,109 @@ def process_frame(frame, params):
     previous_cells = current_cells.copy()
     cell_lifetimes = new_cell_lifetimes
     
+    # Update final_seg with the binary mask
+    final_seg = binary.copy()
+    
     return display_frame, white_window, final_seg
+
+def process_frame_debug(frame, output_dir, clahe_clip_limit=2.5, clahe_tile_size=10):
+    """Process a frame and save intermediate steps"""
+    import os
+    
+    # Convert frame to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    cv2.imwrite(os.path.join(output_dir, '1-Grayscale.png'), gray)
+    
+    # Enhance contrast using CLAHE
+    clahe = cv2.createCLAHE(clipLimit=clahe_clip_limit, tileGridSize=(clahe_tile_size, clahe_tile_size))
+    enhanced_image = clahe.apply(gray)
+    cv2.imwrite(os.path.join(output_dir, '2-EnhancedContrast.png'), enhanced_image)
+    
+    # Convert to float and apply Gaussian blur
+    float_image = enhanced_image.astype(np.float32) / 255.0
+    denoised_image = cv2.GaussianBlur(float_image, (3, 3), 2)
+    cv2.imwrite(os.path.join(output_dir, '3-GaussianBlur.png'), (denoised_image * 255).astype(np.uint8))
+    
+    # Kirsch operators for edge detection
+    kirsch_kernels = [
+        np.array([[5, 5, 5], [-3, 0, -3], [-3, -3, -3]], dtype=np.float32),
+        np.array([[5, 5, -3], [5, 0, -3], [-3, -3, -3]], dtype=np.float32),
+        np.array([[5, -3, -3], [5, 0, -3], [5, -3, -3]], dtype=np.float32),
+        np.array([[-3, -3, -3], [5, 0, -3], [5, 5, -3]], dtype=np.float32),
+        np.array([[-3, -3, -3], [-3, 0, -3], [5, 5, 5]], dtype=np.float32),
+        np.array([[-3, -3, -3], [-3, 0, 5], [-3, 5, 5]], dtype=np.float32),
+        np.array([[-3, -3, 5], [-3, 0, 5], [-3, -3, 5]], dtype=np.float32),
+        np.array([[-3, 5, 5], [-3, 0, 5], [-3, -3, -3]], dtype=np.float32)
+    ]
+
+    kirsch_outputs = []
+    for i, kernel in enumerate(kirsch_kernels):
+        # Apply Kirsch filter (keeping float32)
+        filtered = cv2.filter2D(denoised_image, -1, kernel)
+        
+        # Convert to absolute values
+        filtered = np.abs(filtered)
+        
+        # Normalize to 0-1 range
+        filtered_min = np.min(filtered)
+        filtered_max = np.max(filtered)
+        if filtered_max > filtered_min:  # Avoid division by zero
+            filtered_norm = (filtered - filtered_min) / (filtered_max - filtered_min)
+        else:
+            filtered_norm = np.zeros_like(filtered)
+        
+        # Calculate Otsu threshold
+        binary = filtered_norm > filters.threshold_otsu(filtered_norm)
+        kirsch_outputs.append(binary)
+        
+        # Save each direction's output
+        cv2.imwrite(os.path.join(output_dir, f'4-KirschDirection{i+1}.png'), 
+                   binary.astype(np.uint8) * 255)
+
+    # Combine all Kirsch outputs
+    binary = np.zeros_like(kirsch_outputs[0], dtype=bool)
+    for output in kirsch_outputs:
+        binary = binary | output
+    
+    # Convert to uint8 for contour detection
+    binary = binary.astype(np.uint8) * 255
+    cv2.imwrite(os.path.join(output_dir, '5-KirschCombined.png'), binary)
+
+    # Remove small areas
+    binary = morphology.remove_small_objects(binary.astype(bool), min_size=100)
+    cv2.imwrite(os.path.join(output_dir, '6-SmallAreasRemoved.png'), 
+                binary.astype(np.uint8) * 255)
+
+    # Clean up - using less aggressive thinning
+    binary = morphology.thin(binary, max_num_iter=1)
+    cv2.imwrite(os.path.join(output_dir, '7-Thinned.png'), 
+                binary.astype(np.uint8) * 255)
+
+    # Additional cleaning steps
+    # 1. Use area opening with smaller threshold
+    binary = morphology.remove_small_objects(binary, min_size=15)
+    cv2.imwrite(os.path.join(output_dir, '8-SmallObjectsRemoved.png'), 
+                binary.astype(np.uint8) * 255)
+    
+    # 2. Remove thin connections using area closing
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    binary = cv2.morphologyEx(binary.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    cv2.imwrite(os.path.join(output_dir, '9-ThinConnectionsRemoved.png'), 
+                binary.astype(np.uint8) * 255)
+    
+    # 3. Calculate and filter based on eccentricity
+    labeled = measure.label(binary)
+    props = measure.regionprops(labeled)
+    mask = np.zeros_like(binary, dtype=bool)
+    
+    for prop in props:
+        if (prop.eccentricity < 0.98 and prop.area > 200) or (prop.area > 400):
+            mask[labeled == prop.label] = True
+    
+    binary = mask.astype(np.uint8) * 255
+    cv2.imwrite(os.path.join(output_dir, '10-FinalSegmentation.png'), binary)
+
+    return binary
 
 def main():
     """Main function to run the cell detection and tracking system."""
@@ -190,6 +363,9 @@ def main():
         if not ret:
             print("Error: Could not read frame")
             break
+        
+        # Store current frame for snapshot
+        ui.set_current_frame(frame)
         
         # Process frame
         display_frame, white_window, _ = process_frame(frame, ui.get_parameters())

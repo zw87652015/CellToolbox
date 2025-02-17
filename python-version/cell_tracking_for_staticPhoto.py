@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import os
 import time
 
-def process_image(image_path):
+def process_image(image_path, clahe_clip_limit=2.5, clahe_tile_size=10): #limit=3.0 for more contrast, tile_size=4 for more local enhancement.
     start_time = time.time()  # Start timing
     
     # Create processing folder if it doesn't exist
@@ -25,8 +25,13 @@ def process_image(image_path):
     gray_image = cv2.cvtColor(org, cv2.COLOR_BGR2GRAY)
     cv2.imwrite(os.path.join(processing_folder, '1-GrayImage.png'), gray_image)
 
+    # Enhance contrast using CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    clahe = cv2.createCLAHE(clipLimit=clahe_clip_limit, tileGridSize=(clahe_tile_size, clahe_tile_size))
+    enhanced_image = clahe.apply(gray_image)
+    cv2.imwrite(os.path.join(processing_folder, '1b-EnhancedImage.png'), enhanced_image)
+
     # Convert to double (float) and denoise
-    double_image = gray_image.astype(np.float32) / 255.0
+    double_image = enhanced_image.astype(np.float32) / 255.0
     denoised_image = cv2.GaussianBlur(double_image, (3, 3), 2)
     cv2.imwrite(os.path.join(processing_folder, '2-DenoisedImage.png'), (denoised_image * 255).astype(np.uint8))
 
@@ -164,27 +169,27 @@ def process_image(image_path):
     cv2.imwrite(os.path.join(processing_folder, '14-SmallAreaRemoved.png'), 
                 final_seg.astype(np.uint8) * 255)
 
-    # Clean up
-    final_seg = morphology.thin(final_seg, max_num_iter=3)
+    # Clean up - using less aggressive thinning
+    final_seg = morphology.thin(final_seg, max_num_iter=1)  # Reduced from 3 to 1
     cv2.imwrite(os.path.join(processing_folder, '15-SpursRemoved.png'), 
                 final_seg.astype(np.uint8) * 255)
 
-    # Additional cleaning steps to remove spider-web like noise
-    # 1. Use area opening to remove small objects
-    final_seg = morphology.remove_small_objects(final_seg, min_size=20)
+    # Additional cleaning steps to remove spider-web like noise while preserving cells
+    # 1. Use area opening with smaller threshold to preserve smaller cells
+    final_seg = morphology.remove_small_objects(final_seg, min_size=15)  # Reduced from 20
     
-    # 2. Remove thin connections using area closing
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    # 2. Remove thin connections using area closing with smaller kernel
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))  # Reduced from 3x3
     final_seg = cv2.morphologyEx(final_seg.astype(np.uint8), cv2.MORPH_OPEN, kernel)
     
-    # 3. Calculate and filter based on eccentricity to remove elongated objects
+    # 3. Calculate and filter based on eccentricity with more lenient thresholds
     labeled = measure.label(final_seg)
     props = measure.regionprops(labeled)
     mask = np.zeros_like(final_seg, dtype=bool)
     
     for prop in props:
-        # Filter based on eccentricity and area
-        if prop.eccentricity < 0.95 and prop.area > 300:  # Less elongated objects
+        # More lenient filtering criteria
+        if (prop.eccentricity < 0.98 and prop.area > 200) or (prop.area > 400):
             mask[labeled == prop.label] = True
     
     final_seg = mask
@@ -276,7 +281,7 @@ if __name__ == "__main__":
     
     for i in range(n_runs):
         print(f"\nRun {i+1}/{n_runs}")
-        time_taken = process_image('test5.png')
+        time_taken = process_image('test6.png')
         times.append(time_taken)
     
     avg_time = sum(times) / len(times)
