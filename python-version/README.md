@@ -1,71 +1,107 @@
-# Cell Tracking Python Implementation
+# CellToolbox - Python Version
 
-This is a Python implementation of the cell tracking algorithm, converted from MATLAB code. The implementation uses OpenCV, NumPy, and scikit-image for efficient image processing operations.
+A powerful tool for real-time cell detection and tracking using computer vision techniques. This toolbox provides both USB camera-based live tracking and static photo analysis capabilities.
 
-## Requirements
+## Features
 
-- Python 3.7+
-- NumPy
-- OpenCV (cv2)
-- scikit-image
-- matplotlib
+- Real-time cell detection and tracking from USB camera feed
+- Static photo analysis
+- Interactive parameter adjustment
+- Snapshot analysis for parameter optimization
+- Multiple visualization windows:
+  - Main detection view (with green bounding boxes)
+  - Segmentation view (with white rectangles)
+  - Analysis window for parameter calculation
 
-Install the required packages using:
+## Installation
+
+1. Clone the repository
+2. Install the required dependencies:
 ```bash
-pip install -r requirements.txt
+pip install numpy opencv-python opencv-contrib-python scikit-image
 ```
 
 ## Usage
 
-### Static Image Processing
-1. Place your input image (named 'test3.jpg') in the same directory as the script
-2. Run the script:
-```bash
-python cell_tracking.py
-```
+### Live Cell Tracking (`cell_tracking_for_usbcam.py`)
 
-The script will:
-1. Create a 'processing' directory if it doesn't exist
-2. Process the image through various stages of the cell tracking pipeline
-3. Save intermediate results in the 'processing' directory
-4. Generate a final visualization with detected cells marked with rectangles
-
-### Real-time USB Camera Cell Tracking
-For real-time cell tracking using a USB camera or microscope, use `cell_tracking_for_usbcam.py`:
-
+1. Run the program:
 ```bash
 python cell_tracking_for_usbcam.py
 ```
 
-Features:
-- Real-time cell detection and tracking
-- Temporal smoothing to maintain cell identity across frames
-- Non-Maximum Suppression (NMS) to remove overlapping detections
-- Dual display:
-  - Original view with green rectangle outlines
-  - Fixed 1024x768 black window with white filled rectangles
+2. The program will open three windows:
+   - **Cell Detection Control Panel**: For parameter adjustment
+   - **Cell Detection View**: Shows detected cells with green bounding boxes
+   - **White Rectangles View**: Shows detected cells with white filled rectangles
 
-Parameters (adjustable in the code):
-- `CELL_MEMORY_FRAMES`: How long to maintain a cell after it disappears (default: 4 frames)
-- `MAX_MOVEMENT`: Maximum allowed cell movement between frames (default: 80 pixels)
-- `DISTANCE_THRESHOLD`: Maximum distance for cell matching (default: 50 pixels)
-- `NMS_THRESHOLD`: IOU threshold for Non-Maximum Suppression (default: 0.2)
+3. Adjustable Parameters:
+   - **Area**: Min and max area of cells (in pixels)
+   - **Perimeter**: Min and max perimeter of cells (in pixels)
+   - **Circularity**: Min and max circularity (0-1, where 1 is perfectly circular)
+   - **Memory Frames**: Number of frames to keep tracking a cell after detection
+   - **Max Movement**: Maximum allowed movement between frames (in pixels)
+   - **Distance Threshold**: Maximum distance for cell tracking
 
-Detection Criteria:
-- Area: 50-4000 pixels
-- Perimeter: 50-300 pixels
-- Circularity: 0.8-1.8
-- Aspect ratio: Maximum 1:1.5
+4. Controls:
+   - **Take Snapshot for Analysis**: Captures current frame for parameter optimization
+   - **Update Parameters**: Applies the current parameter values
+   - **Quit**: Closes the program
 
-To exit the program:
-- Press 'q' key
-- Click the close button (X) on either window
-- Both windows will close automatically if one is closed
+### Static Photo Analysis (`cell_tracking_for_staticPhoto.py`)
 
-## Performance Notes
+1. Run the program:
+```bash
+python cell_tracking_for_staticPhoto.py
+```
 
-This Python implementation should perform similarly or better than the MATLAB version because:
-1. OpenCV is highly optimized for image processing operations
-2. NumPy provides efficient array operations
-3. scikit-image implements many image processing algorithms with C-level performance
-4. The implementation uses vectorized operations where possible to minimize loops
+2. Use the file dialog to select an image for analysis
+
+3. The program will display:
+   - Original image with detected cells
+   - Segmentation mask
+   - Analysis results
+
+## Parameter Optimization
+
+1. Click "Take Snapshot for Analysis" in the live view
+2. Label regions as cells or non-cells in the analysis window
+3. Click "Calculate Optimal Thresholds" to compute optimal parameters
+4. The program will suggest parameters based on the labeled data
+
+## Tips for Best Results
+
+1. **Lighting**: Ensure consistent, well-lit conditions
+2. **Camera Focus**: Adjust camera focus for sharp cell boundaries
+3. **Parameter Tuning**:
+   - Start with area constraints
+   - Fine-tune circularity for cell shape
+   - Adjust tracking parameters based on cell movement speed
+
+## Troubleshooting
+
+1. **No Cells Detected**:
+   - Check if area range is appropriate for your cells
+   - Ensure proper lighting and focus
+   - Verify circularity constraints aren't too strict
+
+2. **False Positives**:
+   - Increase minimum area
+   - Tighten circularity range
+   - Use snapshot analysis to optimize parameters
+
+3. **Tracking Issues**:
+   - Increase max movement if cells move quickly
+   - Adjust memory frames based on frame rate
+   - Tune distance threshold for your application
+
+## Dependencies
+
+- numpy
+- opencv-python
+- opencv-contrib-python
+- scikit-image
+
+## Contributing
+
+Feel free to submit issues, fork the repository, and create pull requests for any improvements.
