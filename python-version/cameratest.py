@@ -2,7 +2,7 @@ import cv2
 
 def read_usb_capture():
     # 选择摄像头的编号
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
     # 添加这句是可以用鼠标拖动弹出的窗体
     cv2.namedWindow('real_img', cv2.WINDOW_NORMAL)
     while(cap.isOpened()):

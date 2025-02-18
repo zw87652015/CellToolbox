@@ -20,8 +20,26 @@ class UnifiedUI:
         
         self.white_rectangles_window = tk.Toplevel(self.root)
         self.white_rectangles_window.title("White Rectangles View")
-        self.white_rectangles_window.geometry("800x600")
-        self.white_rectangles_window.minsize(640, 480)
+        
+        # Get screen width and height
+        screen_width = self.white_rectangles_window.winfo_screenwidth()
+        screen_height = self.white_rectangles_window.winfo_screenheight()
+        
+        # Initialize in fullscreen mode
+        self.white_rectangles_window.attributes('-fullscreen', True)
+        self.white_rectangles_window.attributes('-topmost', True)
+        
+        # Add key binding to exit fullscreen (Escape key)
+        def toggle_fullscreen(event=None):
+            is_fullscreen = self.white_rectangles_window.attributes('-fullscreen')
+            if is_fullscreen:
+                self.white_rectangles_window.attributes('-fullscreen', False)
+                self.white_rectangles_window.geometry("800x600")
+            else:
+                self.white_rectangles_window.attributes('-fullscreen', True)
+        
+        self.white_rectangles_window.bind('<Escape>', toggle_fullscreen)
+        self.white_rectangles_window.bind('<Key-F11>', toggle_fullscreen)
         
         # Flag for quitting
         self.quit_flag = False
@@ -79,6 +97,7 @@ class UnifiedUI:
         
         # Variable to store the current frame
         self.current_frame = None
+        self.current_frame2 = None
         
         # Set up window close handlers
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -173,36 +192,86 @@ class UnifiedUI:
     
     def create_video_frames(self):
         """Create frames for displaying video feeds"""
-        self.cell_detection_label = ttk.Label(self.cell_detection_window)
+        # Create a frame to hold the label in the cell detection window
+        cell_frame = ttk.Frame(self.cell_detection_window)
+        cell_frame.pack(fill='both', expand=True)
+        self.cell_detection_label = ttk.Label(cell_frame)
         self.cell_detection_label.pack(fill='both', expand=True)
         
-        self.white_rectangles_label = ttk.Label(self.white_rectangles_window)
+        # Create a frame to hold the label in the white rectangles window
+        white_frame = ttk.Frame(self.white_rectangles_window)
+        white_frame.pack(fill='both', expand=True)
+        self.white_rectangles_label = ttk.Label(white_frame)
         self.white_rectangles_label.pack(fill='both', expand=True)
+        
+        # Bind configure event to handle window resizing
+        self.white_rectangles_window.bind('<Configure>', self._on_resize)
+    
+    def _on_resize(self, event):
+        """Handle window resize events"""
+        if hasattr(self, 'current_frame2') and self.current_frame2 is not None:
+            self._update_white_rectangles_display()
+    
+    def _update_white_rectangles_display(self):
+        """Update white rectangles display with proper scaling"""
+        if self.current_frame2 is None:
+            return
+            
+        # Get current window size
+        win_width = self.white_rectangles_window.winfo_width()
+        win_height = self.white_rectangles_window.winfo_height()
+        
+        # Check if window has valid dimensions
+        if win_width <= 0 or win_height <= 0:
+            return
+            
+        # Get image size
+        img_height, img_width = self.current_frame2.shape[:2]
+        
+        # Calculate scaling factor to maintain aspect ratio
+        scale = min(win_width/img_width, win_height/img_height)
+        
+        # Ensure scale is positive and results in valid dimensions
+        if scale <= 0:
+            return
+            
+        new_width = max(1, int(img_width * scale))
+        new_height = max(1, int(img_height * scale))
+        
+        try:
+            # Resize the image
+            frame2_rgb = cv2.cvtColor(self.current_frame2, cv2.COLOR_BGR2RGB)
+            resized = cv2.resize(frame2_rgb, (new_width, new_height), interpolation=cv2.INTER_AREA)
+            
+            # Convert to PhotoImage
+            frame2_img = Image.fromarray(resized)
+            frame2_photo = ImageTk.PhotoImage(image=frame2_img)
+            
+            # Update label
+            self.white_rectangles_label.configure(image=frame2_photo)
+            self.white_rectangles_label.image = frame2_photo
+        except cv2.error:
+            # If resize fails, skip this update
+            pass
     
     def update_video_display(self, frame1, frame2):
         """Update the video display windows with new frames"""
         if self.quit_flag:
             return
             
-        # Store current frame for snapshot
+        # Store current frames
         self.set_current_frame(frame1)
+        self.current_frame2 = frame2.copy()  # Store frame2 for resize handling
         
-        # Convert frames to PhotoImage
+        # Update cell detection display (normal size)
         frame1_rgb = cv2.cvtColor(frame1, cv2.COLOR_BGR2RGB)
-        frame2_rgb = cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
-        
         frame1_img = Image.fromarray(frame1_rgb)
-        frame2_img = Image.fromarray(frame2_rgb)
-        
         frame1_photo = ImageTk.PhotoImage(image=frame1_img)
-        frame2_photo = ImageTk.PhotoImage(image=frame2_img)
-        
-        # Update labels
         self.cell_detection_label.configure(image=frame1_photo)
         self.cell_detection_label.image = frame1_photo
         
-        self.white_rectangles_label.configure(image=frame2_photo)
-        self.white_rectangles_label.image = frame2_photo
+        # Update white rectangles display with scaling
+        self._update_white_rectangles_display()
         
         # Process events
         self.root.update()
