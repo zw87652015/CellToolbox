@@ -50,21 +50,21 @@ class UnifiedUI:
         
         # Initialize parameters with default values
         self._parameters = {
-            'area': (50, 4000),
-            'perimeter': (50, 300),
-            'circularity': (0.8, 1.8),
+            'area': (100, 5000),
+            'perimeter': (30, 1000),
+            'circularity': (0.2, 2),
             'cell_memory_frames': 5,
             'max_movement': 200,
             'distance_threshold': 50
         }
         
         # Create parameter variables
-        self.area_min = tk.StringVar(value="50")
-        self.area_max = tk.StringVar(value="4000")
-        self.perimeter_min = tk.StringVar(value="50")
-        self.perimeter_max = tk.StringVar(value="300")
-        self.circularity_min = tk.StringVar(value="0.8")
-        self.circularity_max = tk.StringVar(value="1.8")
+        self.area_min = tk.StringVar(value="100")
+        self.area_max = tk.StringVar(value="5000")
+        self.perimeter_min = tk.StringVar(value="30")
+        self.perimeter_max = tk.StringVar(value="1000")
+        self.circularity_min = tk.StringVar(value="0.2")
+        self.circularity_max = tk.StringVar(value="2")
         self.cell_memory_frames = tk.StringVar(value="5")
         self.max_movement = tk.StringVar(value="200")
         self.distance_threshold = tk.StringVar(value="50")

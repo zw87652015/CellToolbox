@@ -94,16 +94,12 @@ def process_frame(frame, params, clahe_clip_limit=2.5, clahe_tile_size=10):
     float_image = enhanced_image.astype(np.float32) / 255.0
     denoised_image = cv2.GaussianBlur(float_image, (3, 3), 2)
     
-    # Kirsch operators for edge detection
+    # Kirsch operators for edge detection (4 main directions)
     kirsch_kernels = [
-        np.array([[5, 5, 5], [-3, 0, -3], [-3, -3, -3]], dtype=np.float32),
-        np.array([[5, 5, -3], [5, 0, -3], [-3, -3, -3]], dtype=np.float32),
-        np.array([[5, -3, -3], [5, 0, -3], [5, -3, -3]], dtype=np.float32),
-        np.array([[-3, -3, -3], [5, 0, -3], [5, 5, -3]], dtype=np.float32),
-        np.array([[-3, -3, -3], [-3, 0, -3], [5, 5, 5]], dtype=np.float32),
-        np.array([[-3, -3, -3], [-3, 0, 5], [-3, 5, 5]], dtype=np.float32),
-        np.array([[-3, -3, 5], [-3, 0, 5], [-3, -3, 5]], dtype=np.float32),
-        np.array([[-3, 5, 5], [-3, 0, 5], [-3, -3, -3]], dtype=np.float32)
+        np.array([[5, 5, 5], [-3, 0, -3], [-3, -3, -3]], dtype=np.float32),  # Vertical
+        np.array([[5, -3, -3], [5, 0, -3], [5, -3, -3]], dtype=np.float32),  # Horizontal
+        np.array([[5, 5, -3], [5, 0, -3], [-3, -3, -3]], dtype=np.float32),  # Diagonal 1
+        np.array([[-3, -3, 5], [-3, 0, 5], [-3, -3, 5]], dtype=np.float32)   # Diagonal 2
     ]
 
     kirsch_outputs = []
@@ -262,16 +258,12 @@ def process_frame_debug(frame, output_dir, clahe_clip_limit=2.5, clahe_tile_size
     denoised_image = cv2.GaussianBlur(float_image, (3, 3), 2)
     cv2.imwrite(os.path.join(output_dir, '3-GaussianBlur.png'), (denoised_image * 255).astype(np.uint8))
     
-    # Kirsch operators for edge detection
+    # Kirsch operators for edge detection (4 main directions)
     kirsch_kernels = [
-        np.array([[5, 5, 5], [-3, 0, -3], [-3, -3, -3]], dtype=np.float32),
-        np.array([[5, 5, -3], [5, 0, -3], [-3, -3, -3]], dtype=np.float32),
-        np.array([[5, -3, -3], [5, 0, -3], [5, -3, -3]], dtype=np.float32),
-        np.array([[-3, -3, -3], [5, 0, -3], [5, 5, -3]], dtype=np.float32),
-        np.array([[-3, -3, -3], [-3, 0, -3], [5, 5, 5]], dtype=np.float32),
-        np.array([[-3, -3, -3], [-3, 0, 5], [-3, 5, 5]], dtype=np.float32),
-        np.array([[-3, -3, 5], [-3, 0, 5], [-3, -3, 5]], dtype=np.float32),
-        np.array([[-3, 5, 5], [-3, 0, 5], [-3, -3, -3]], dtype=np.float32)
+        np.array([[5, 5, 5], [-3, 0, -3], [-3, -3, -3]], dtype=np.float32),  # Vertical
+        np.array([[5, -3, -3], [5, 0, -3], [5, -3, -3]], dtype=np.float32),  # Horizontal
+        np.array([[5, 5, -3], [5, 0, -3], [-3, -3, -3]], dtype=np.float32),  # Diagonal 1
+        np.array([[-3, -3, 5], [-3, 0, 5], [-3, -3, 5]], dtype=np.float32)   # Diagonal 2
     ]
 
     kirsch_outputs = []
