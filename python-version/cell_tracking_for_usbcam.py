@@ -7,7 +7,7 @@ from parameter_control import UnifiedUI
 import os
 
 # Global variables for cell tracking and persistence
-CAMERASELECTED = 1  # 0~infinity for USB camera index
+CAMERASELECTED = 0  # 0~infinity for USB camera index
 previous_cells = []  # List to store bounding boxes of previously detected cells
 cell_lifetimes = []  # List to track the remaining frames each cell will be displayed
 CELL_MEMORY_FRAMES = 5  # Number of frames to keep tracking a cell after it disappears
@@ -140,21 +140,18 @@ def process_frame(frame, params, clahe_clip_limit=2.5, clahe_tile_size=10):
     # Clean up - using less aggressive thinning
     binary = morphology.thin(binary, max_num_iter=1)
 
-    # Additional cleaning steps to remove spider-web like noise while preserving cells
-    # 1. Use area opening with smaller threshold to preserve smaller cells
-    binary = morphology.remove_small_objects(binary, min_size=15)
-    
-    # 2. Remove thin connections using area closing with smaller kernel
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-    binary = cv2.morphologyEx(binary.astype(np.uint8), cv2.MORPH_OPEN, kernel)
-    
-    # 3. Calculate and filter based on eccentricity with more lenient thresholds
+    # Fill small holes in cells to fix gaps
+    binary = morphology.remove_small_holes(binary.astype(bool), area_threshold=100)
+    binary = binary.astype(np.uint8) * 255
+
+    # Calculate and filter based on more lenient eccentricity
     labeled = measure.label(binary)
     props = measure.regionprops(labeled)
     mask = np.zeros_like(binary, dtype=bool)
     
     for prop in props:
-        if (prop.eccentricity < 0.98 and prop.area > 200) or (prop.area > 400):
+        # More lenient criteria for eccentricity and area
+        if (prop.eccentricity < 0.99 and prop.area > 100) or (prop.area > 300):
             mask[labeled == prop.label] = True
     
     binary = mask.astype(np.uint8) * 255
@@ -320,29 +317,64 @@ def process_frame_debug(frame, output_dir, clahe_clip_limit=2.5, clahe_tile_size
     cv2.imwrite(os.path.join(output_dir, '7-Thinned.png'), 
                 binary.astype(np.uint8) * 255)
 
-    # Additional cleaning steps
-    # 1. Use area opening with smaller threshold
-    binary = morphology.remove_small_objects(binary, min_size=15)
-    cv2.imwrite(os.path.join(output_dir, '8-SmallObjectsRemoved.png'), 
-                binary.astype(np.uint8) * 255)
-    
-    # 2. Remove thin connections using area closing
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-    binary = cv2.morphologyEx(binary.astype(np.uint8), cv2.MORPH_OPEN, kernel)
-    cv2.imwrite(os.path.join(output_dir, '9-ThinConnectionsRemoved.png'), 
-                binary.astype(np.uint8) * 255)
-    
-    # 3. Calculate and filter based on eccentricity
+    # Fill small holes in cells to fix gaps
+    binary = morphology.remove_small_holes(binary.astype(bool), area_threshold=100)
+    binary = binary.astype(np.uint8) * 255
+    cv2.imwrite(os.path.join(output_dir, '8-HolesFilled.png'), binary)
+
+    # Calculate and filter based on more lenient eccentricity
     labeled = measure.label(binary)
     props = measure.regionprops(labeled)
     mask = np.zeros_like(binary, dtype=bool)
     
     for prop in props:
-        if (prop.eccentricity < 0.98 and prop.area > 200) or (prop.area > 400):
+        # More lenient criteria for eccentricity and area
+        if (prop.eccentricity < 0.99 and prop.area > 100) or (prop.area > 300):
             mask[labeled == prop.label] = True
     
     binary = mask.astype(np.uint8) * 255
-    cv2.imwrite(os.path.join(output_dir, '10-FinalSegmentation.png'), binary)
+    cv2.imwrite(os.path.join(output_dir, '9-FinalSegmentation.png'), binary)
+
+    # Find contours
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Create visualization windows
+    display_frame = frame.copy()
+    black_window = np.zeros_like(frame)  # For green contours
+    white_window = np.zeros_like(frame)  # For white rectangles
+    final_seg = np.zeros_like(frame)
+    
+    # Process each contour with more lenient criteria
+    for contour in contours:
+        # Calculate properties
+        area = cv2.contourArea(contour)
+        perimeter = cv2.arcLength(contour, True)
+        circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
+        
+        # More lenient parameters for debug visualization
+        area_min, area_max = 100, 5000  # Reduced minimum area
+        perimeter_min, perimeter_max = 30, 1000  # Reduced minimum perimeter
+        circularity_min, circularity_max = 0.2, 1.0  # More lenient circularity
+        
+        # Check if the contour meets the criteria
+        if (area_min <= area <= area_max and
+            perimeter_min <= perimeter <= perimeter_max and
+            circularity_min <= circularity <= circularity_max):
+            
+            # Get bounding box
+            x, y, w, h = cv2.boundingRect(contour)
+            
+            # Draw green contour on black window
+            cv2.drawContours(black_window, [contour], -1, (0, 255, 0), 2)
+            cv2.drawContours(final_seg, [contour], -1, (0, 255, 0), -1)
+            
+            # Draw filled white rectangle on white window
+            cv2.rectangle(white_window, (x, y), (x + w, y + h), (255, 255, 255), -1)
+    
+    # Save additional debug images
+    cv2.imwrite(os.path.join(output_dir, '10-ContourOutlines.png'), black_window)
+    cv2.imwrite(os.path.join(output_dir, '11-BoundingBoxes.png'), white_window)
+    cv2.imwrite(os.path.join(output_dir, '12-FinalSegmentationColored.png'), final_seg)
 
     return binary
 
