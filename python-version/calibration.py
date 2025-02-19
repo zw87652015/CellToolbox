@@ -8,11 +8,11 @@ class ProjectorCameraCalibration:
     def __init__(self):
         self.projector_width = 1920
         self.projector_height = 1080
-        self.camera_width = 640
-        self.camera_height = 480
+        self.camera_width = 1200
+        self.camera_height = 675
         
         # Initialize camera
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(1)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
         print(f"Camera resolution: {self.camera_width}x{self.camera_height}")
@@ -85,119 +85,54 @@ class ProjectorCameraCalibration:
             self.calibrate_button.config(state='normal')
             return
             
-        # Detect pattern points in the captured frame
-        camera_points = self.detect_pattern_in_camera(frame)
-        if len(camera_points) < 4:
-            print("Not enough pattern points detected")
+        # Detect pattern and analyze line distances
+        camera_pattern = self.detect_pattern_in_camera(frame)
+        if camera_pattern is None:
+            print("Failed to detect pattern")
             self.calibrate_button.config(state='normal')
             return
-        
-        # Convert points to numpy arrays
-        camera_points = np.array(camera_points, dtype=np.float32)
-        
-        # Create corresponding screen points based on grid
-        screen_points = []
-        cell_size = 100
-        margin = 40
-        
-        for cam_pt in camera_points:
-            # Estimate grid position based on point location
-            grid_x = round((cam_pt[0] - margin) / cell_size)
-            grid_y = round((cam_pt[1] - margin) / cell_size)
             
-            # Convert grid position to screen coordinates
-            screen_x = margin + grid_x * cell_size
-            screen_y = margin + grid_y * cell_size
-            screen_points.append([screen_x, screen_y])
-        
-        screen_points = np.array(screen_points, dtype=np.float32)
-        
-        # Debug: Show point correspondences
-        debug_correspondences = np.zeros((max(frame.shape[0], self.screen_height), 
-                                        frame.shape[1] + self.screen_width, 3), 
-                                       dtype=np.uint8)
-        # Draw camera view
-        debug_correspondences[0:frame.shape[0], 0:frame.shape[1]] = frame
-        
-        # Draw screen pattern
-        pattern_img = np.zeros((self.screen_height, self.screen_width, 3), dtype=np.uint8)
-        for i in range(0, len(screen_points)):
-            cv2.circle(pattern_img, 
-                      (int(screen_points[i][0]), int(screen_points[i][1])), 
-                      3, (0, 255, 0), -1)
-            
-        debug_correspondences[0:self.screen_height, 
-                            frame.shape[1]:frame.shape[1]+self.screen_width] = pattern_img
-        
-        # Draw correspondence lines
-        for i in range(len(camera_points)):
-            pt1 = (int(camera_points[i][0]), int(camera_points[i][1]))
-            pt2 = (int(screen_points[i][0]) + frame.shape[1], int(screen_points[i][1]))
-            cv2.line(debug_correspondences, pt1, pt2, (0, 255, 255), 1)
-            # Number the points
-            cv2.putText(debug_correspondences, str(i), pt1, 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-            cv2.putText(debug_correspondences, str(i), pt2, 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-        
-        cv2.imshow("Point Correspondences", debug_correspondences)
-        
-        # Calculate homography
-        H, mask = cv2.findHomography(camera_points, screen_points, cv2.RANSAC, 5.0)
-        print("\nHomography matrix:")
-        print(H)
-        print("\nRANSAC mask (1 = inlier, 0 = outlier):")
-        print(mask.ravel())
-        
-        # Map camera corners to screen space
-        camera_corners = np.array([
-            [0, 0],
-            [self.camera_width, 0],
-            [self.camera_width, self.camera_height],
-            [0, self.camera_height]
-        ], dtype=np.float32)
-        
-        camera_corners_homog = np.ones((4, 3))
-        camera_corners_homog[:, :2] = camera_corners
-        screen_corners = np.dot(H, camera_corners_homog.T).T
-        screen_corners = screen_corners[:, :2] / screen_corners[:, 2:]
-        
-        self.fov_corners = screen_corners.astype(np.int32)
-        self.draw_fov()
-        print("\nCamera FOV corners in screen coordinates:")
-        print(self.fov_corners)
-        
-        # Debug: Draw the mapped FOV on camera view
-        debug_fov = frame.copy()
-        for i in range(4):
-            pt1 = (int(camera_corners[i][0]), int(camera_corners[i][1]))
-            pt2 = (int(camera_corners[(i+1)%4][0]), int(camera_corners[(i+1)%4][1]))
-            cv2.line(debug_fov, pt1, pt2, (0, 0, 255), 2)
-        cv2.imshow("Camera FOV", debug_fov)
+        # Find pattern location
+        self.fov_corners = self.find_pattern_location(camera_pattern)
+        if self.fov_corners is not None:
+            self.draw_fov()
+            print("\nCamera FOV corners in screen coordinates:")
+            print(self.fov_corners)
+        else:
+            print("Failed to locate pattern")
         
         self.calibrate_button.config(state='normal')
         
     def detect_pattern_in_camera(self, frame):
-        """Detect the calibration pattern in camera view"""
+        """Detect the calibration pattern in camera view and analyze line distances"""
+        # Flip frame horizontally
+        frame = cv2.flip(frame, 1)
+        
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
         # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         enhanced = clahe.apply(gray)
         
-        # Apply Gaussian blur to reduce noise
-        blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        # Use a gentle Gaussian blur
+        blurred = cv2.GaussianBlur(enhanced, (3, 3), 0)
         
-        # Threshold to get bright lines
-        _, thresh = cv2.threshold(blurred, 160, 255, cv2.THRESH_BINARY)
+        # Simple thresholding with high value to get just the bright lines
+        _, thresh = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY)
+        
+        # Clean up noise with a small closing operation
+        kernel = np.ones((3,3), np.uint8)
+        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         
         # Find lines using Hough transform
-        lines = cv2.HoughLinesP(thresh, 1, np.pi/180, 50, 
-                               minLineLength=30, maxLineGap=10)
+        lines = cv2.HoughLinesP(cleaned, 1, np.pi/180, 
+                               threshold=50,
+                               minLineLength=40, 
+                               maxLineGap=10)
         
         if lines is None:
-            return []
+            return None
             
         # Separate horizontal and vertical lines
         horizontal_lines = []
@@ -206,63 +141,163 @@ class ProjectorCameraCalibration:
         for line in lines:
             x1, y1, x2, y2 = line[0]
             angle = abs(np.arctan2(y2 - y1, x2 - x1))
+            length = np.sqrt((x2-x1)**2 + (y2-y1)**2)
             
-            # Classify lines as horizontal or vertical based on angle
-            if angle < np.pi/4 or angle > 3*np.pi/4:  # Horizontal
-                horizontal_lines.append(line[0])
-            else:  # Vertical
-                vertical_lines.append(line[0])
+            # Use stricter angle criteria and minimum length
+            if angle < np.pi/6 or angle > 5*np.pi/6:  # Horizontal (±30°)
+                y_avg = (y1 + y2) / 2  # Use average y-coordinate
+                x_min, x_max = min(x1, x2), max(x1, x2)
+                if length > 30:  # Minimum length threshold
+                    horizontal_lines.append((y_avg, (x_min, x_max)))
+            elif np.pi/3 <= angle <= 2*np.pi/3:  # Vertical (±30° from vertical)
+                x_avg = (x1 + x2) / 2  # Use average x-coordinate
+                y_min, y_max = min(y1, y2), max(y1, y2)
+                if length > 30:  # Minimum length threshold
+                    vertical_lines.append((x_avg, (y_min, y_max)))
         
-        # Find intersection points
-        intersection_points = []
-        for h_line in horizontal_lines:
-            for v_line in vertical_lines:
-                h_x1, h_y1, h_x2, h_y2 = h_line
-                v_x1, v_y1, v_x2, v_y2 = v_line
-                
-                # Line equations
-                A = np.array([
-                    [h_y2 - h_y1, h_x1 - h_x2],
-                    [v_y2 - v_y1, v_x1 - v_x2]
-                ])
-                b = np.array([
-                    [h_y2*h_x1 - h_y1*h_x2],
-                    [v_y2*v_x1 - v_y1*v_x2]
-                ])
-                
-                try:
-                    x, y = np.linalg.solve(A, b)
-                    # Check if intersection is within line segments
-                    if (min(h_x1, h_x2) <= x[0] <= max(h_x1, h_x2) and
-                        min(v_x1, v_x2) <= x[0] <= max(v_x1, v_x2) and
-                        min(h_y1, h_y2) <= y[0] <= max(h_y1, h_y2) and
-                        min(v_y1, v_y2) <= y[0] <= max(v_y1, v_y2)):
-                        intersection_points.append((int(x[0]), int(y[0])))
-                except np.linalg.LinAlgError:
-                    continue
+        # Remove duplicate lines (lines that are very close to each other)
+        def merge_close_lines(lines, threshold=10):
+            if not lines:
+                return []
+            lines.sort()  # Sort by position
+            merged = []
+            current = lines[0]
+            
+            for line in lines[1:]:
+                if abs(line[0] - current[0]) < threshold:
+                    # Merge lines by averaging position and extending range
+                    pos = (current[0] + line[0]) / 2
+                    range_min = min(current[1][0], line[1][0])
+                    range_max = max(current[1][1], line[1][1])
+                    current = (pos, (range_min, range_max))
+                else:
+                    merged.append(current)
+                    current = line
+            merged.append(current)
+            return merged
+        
+        horizontal_lines = merge_close_lines(horizontal_lines)
+        vertical_lines = merge_close_lines(vertical_lines)
+        
+        # Calculate distances between adjacent lines
+        h_distances = []
+        v_distances = []
+        
+        for i in range(1, len(horizontal_lines)):
+            dist = horizontal_lines[i][0] - horizontal_lines[i-1][0]
+            h_distances.append(dist)
+            
+        for i in range(1, len(vertical_lines)):
+            dist = vertical_lines[i][0] - vertical_lines[i-1][0]
+            v_distances.append(dist)
         
         # Show intermediate results for debugging
         debug_frame = frame.copy()
         
         # Draw horizontal lines in blue
-        for line in horizontal_lines:
-            x1, y1, x2, y2 = line
-            cv2.line(debug_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-        
+        for y, (x1, x2) in horizontal_lines:
+            cv2.line(debug_frame, (int(x1), int(y)), (int(x2), int(y)), (255, 0, 0), 2)
+            
         # Draw vertical lines in green
-        for line in vertical_lines:
-            x1, y1, x2, y2 = line
-            cv2.line(debug_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        for x, (y1, y2) in vertical_lines:
+            cv2.line(debug_frame, (int(x), int(y1)), (int(x), int(y2)), (0, 255, 0), 2)
         
-        # Draw intersection points in red
-        for pt in intersection_points:
-            cv2.circle(debug_frame, pt, 5, (0, 0, 255), -1)
+        # Draw distances
+        for i, dist in enumerate(h_distances):
+            y = (horizontal_lines[i][0] + horizontal_lines[i+1][0]) // 2
+            x = min(horizontal_lines[i][1][0], horizontal_lines[i+1][1][0])
+            cv2.putText(debug_frame, f"{dist:.1f}", (int(x), int(y)), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+            
+        for i, dist in enumerate(v_distances):
+            x = (vertical_lines[i][0] + vertical_lines[i+1][0]) // 2
+            y = min(vertical_lines[i][1][0], vertical_lines[i+1][1][0])
+            cv2.putText(debug_frame, f"{dist:.1f}", (int(x), int(y)), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         
-        debug_images = np.hstack([gray, enhanced, thresh])
+        # Show all processing steps
+        debug_images = np.hstack([
+            cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR),
+            cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR),
+            cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+        ])
         cv2.imshow("Processing Steps", debug_images)
         cv2.imshow("Detected Pattern", debug_frame)
         
-        return intersection_points
+        return {
+            'horizontal_lines': horizontal_lines,
+            'vertical_lines': vertical_lines,
+            'h_distances': h_distances,
+            'v_distances': v_distances
+        }
+        
+    def find_pattern_location(self, camera_pattern):
+        """Find where in the screen pattern the camera pattern matches"""
+        if camera_pattern is None:
+            return None
+            
+        # Get screen pattern properties
+        cell_size = 100  # Size of each grid cell in screen coordinates
+        screen_margin = 40  # Screen pattern margin
+        
+        # Calculate the average cell size in camera pixels
+        avg_h_dist = np.mean(camera_pattern['h_distances']) if camera_pattern['h_distances'] else 0
+        avg_v_dist = np.mean(camera_pattern['v_distances']) if camera_pattern['v_distances'] else 0
+        
+        if avg_h_dist == 0 or avg_v_dist == 0:
+            print("Failed to calculate average distances")
+            return None
+            
+        # Calculate number of cells visible in camera view
+        h_cells = len(camera_pattern['h_distances']) + 1
+        v_cells = len(camera_pattern['v_distances']) + 1
+        
+        print("\nDebug Info:")
+        print(f"Average horizontal distance in camera pixels: {avg_h_dist:.1f}")
+        print(f"Average vertical distance in camera pixels: {avg_v_dist:.1f}")
+        print(f"Number of cells: {h_cells} rows x {v_cells} columns")
+        
+        # Get the bounds of detected pattern in camera view
+        left = min(x for x, _ in camera_pattern['vertical_lines'])
+        right = max(x for x, _ in camera_pattern['vertical_lines'])
+        top = min(y for y, _ in camera_pattern['horizontal_lines'])
+        bottom = max(y for y, _ in camera_pattern['horizontal_lines'])
+        
+        # Calculate pattern width and height in camera pixels
+        pattern_width_cam = right - left
+        pattern_height_cam = bottom - top
+        
+        # Calculate pattern width and height in screen pixels
+        pattern_width_screen = v_cells * cell_size
+        pattern_height_screen = h_cells * cell_size
+        
+        # Calculate scale factors
+        scale_x = pattern_width_screen / pattern_width_cam
+        scale_y = pattern_height_screen / pattern_height_cam
+        
+        print(f"Pattern size in camera: {pattern_width_cam:.1f} x {pattern_height_cam:.1f} pixels")
+        print(f"Pattern size in screen: {pattern_width_screen} x {pattern_height_screen} pixels")
+        print(f"Scale factors: x={scale_x:.3f}, y={scale_y:.3f}")
+        
+        # Find leftmost visible cell in screen coordinates
+        leftmost_cell = round((left - screen_margin) / avg_v_dist)
+        topmost_cell = round((top - screen_margin) / avg_h_dist)
+        
+        # Convert camera coordinates to screen coordinates
+        screen_left = screen_margin + leftmost_cell * cell_size
+        screen_right = screen_left + pattern_width_screen
+        screen_top = screen_margin + topmost_cell * cell_size
+        screen_bottom = screen_top + pattern_height_screen
+        
+        print(f"Screen coordinates: left={screen_left}, right={screen_right}, top={screen_top}, bottom={screen_bottom}")
+        
+        # Create corner points for FOV
+        return np.array([
+            [screen_left, screen_top],
+            [screen_right, screen_top],
+            [screen_right, screen_bottom],
+            [screen_left, screen_bottom]
+        ], dtype=np.int32)
         
     def draw_fov(self):
         """Draw FOV rectangle on the pattern window"""

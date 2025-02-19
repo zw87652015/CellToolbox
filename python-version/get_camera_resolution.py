@@ -1,6 +1,6 @@
 import cv2
 
-def get_camera_resolution(camera_index=1):
+def get_camera_resolution(camera_index=0):
     cap = cv2.VideoCapture(camera_index)
     
     if not cap.isOpened():
