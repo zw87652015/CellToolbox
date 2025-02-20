@@ -194,10 +194,10 @@ class SnapshotAnalyzer:
         ttk.Button(control_container, text="Save Labels", 
                   command=save_labels).pack(pady=10)
         
-    def find_optimal_threshold(self, cell_values, not_cell_values, margin=0.1):
-        """Find optimal threshold between cell and not-cell distributions"""
+    def find_optimal_threshold(self, cell_values, not_cell_values, current_min, current_max, margin=0.1):
+        """Find optimal threshold between cell and not-cell distributions, considering current parameters"""
         if len(cell_values) == 0 or len(not_cell_values) == 0:
-            return None, None
+            return current_min, current_max
             
         # Calculate statistics
         cell_mean = np.mean(cell_values)
@@ -205,40 +205,47 @@ class SnapshotAnalyzer:
         not_cell_mean = np.mean(not_cell_values)
         not_cell_std = np.std(not_cell_values)
         
-        # Always base thresholds primarily on cell distribution
-        min_val = cell_mean - cell_std
-        max_val = cell_mean + cell_std
+        # Calculate new thresholds based on selections
+        new_min = cell_mean - cell_std
+        new_max = cell_mean + cell_std
         
         # Adjust thresholds based on non-cell distribution
         if cell_mean < not_cell_mean:
             # Cells are smaller/lower than non-cells
-            # Tighten upper bound to avoid false positives
             potential_max = not_cell_mean - not_cell_std
-            if potential_max < max_val:
-                max_val = potential_max
+            if potential_max < new_max:
+                new_max = potential_max
         else:
             # Cells are larger/higher than non-cells
-            # Tighten lower bound to avoid false positives
             potential_min = not_cell_mean + not_cell_std
-            if potential_min > min_val:
-                min_val = potential_min
+            if potential_min > new_min:
+                new_min = potential_min
+        
+        # Consider current parameters in the refinement
+        # Use weighted average between current and new parameters
+        # Weight new parameters less to make them act more as a refinement
+        weight_current = 0.7  # Give more weight to current parameters
+        weight_new = 0.3     # Give less weight to new parameters
+        
+        refined_min = (current_min * weight_current + new_min * weight_new)
+        refined_max = (current_max * weight_current + new_max * weight_new)
         
         # Ensure we don't exclude clear cell examples
         cell_q1 = np.percentile(cell_values, 25)
         cell_q3 = np.percentile(cell_values, 75)
         cell_iqr = cell_q3 - cell_q1
         
-        # Expand bounds if they're too tight
-        if min_val > cell_q1 - 0.5 * cell_iqr:
-            min_val = cell_q1 - 0.5 * cell_iqr
-        if max_val < cell_q3 + 0.5 * cell_iqr:
-            max_val = cell_q3 + 0.5 * cell_iqr
+        # Expand bounds if they're too tight, but consider current bounds
+        if refined_min > cell_q1 - 0.5 * cell_iqr:
+            refined_min = min(current_min, cell_q1 - 0.5 * cell_iqr)
+        if refined_max < cell_q3 + 0.5 * cell_iqr:
+            refined_max = max(current_max, cell_q3 + 0.5 * cell_iqr)
         
         # Ensure bounds are within reasonable range
-        min_val = max(min_val, np.min(cell_values) * 0.9)
-        max_val = min(max_val, np.max(cell_values) * 1.1)
+        refined_min = max(refined_min, min(current_min, np.min(cell_values) * 0.9))
+        refined_max = min(refined_max, max(current_max, np.max(cell_values) * 1.1))
         
-        return min_val, max_val
+        return refined_min, refined_max
         
     def calculate_optimal_thresholds(self):
         """Calculate optimal thresholds based on labeled data using statistical analysis"""
@@ -256,20 +263,39 @@ class SnapshotAnalyzer:
                 "Need both cell and non-cell examples for analysis")
             return
             
-        # Calculate optimal thresholds for each parameter
+        # Get current parameter values
+        try:
+            current_area_min = float(self.ui.area_min.get())
+            current_area_max = float(self.ui.area_max.get())
+            current_perimeter_min = float(self.ui.perimeter_min.get())
+            current_perimeter_max = float(self.ui.perimeter_max.get())
+            current_circularity_min = float(self.ui.circularity_min.get())
+            current_circularity_max = float(self.ui.circularity_max.get())
+        except ValueError:
+            messagebox.showwarning("Invalid Parameters", 
+                "Current parameters are invalid. Please ensure all parameters are numbers.")
+            return
+            
+        # Calculate refined thresholds for each parameter
         area_min, area_max = self.find_optimal_threshold(
             cells['area'].values, 
-            not_cells['area'].values
+            not_cells['area'].values,
+            current_area_min,
+            current_area_max
         )
         
         perimeter_min, perimeter_max = self.find_optimal_threshold(
             cells['perimeter'].values,
-            not_cells['perimeter'].values
+            not_cells['perimeter'].values,
+            current_perimeter_min,
+            current_perimeter_max
         )
         
         circularity_min, circularity_max = self.find_optimal_threshold(
             cells['circularity'].values,
-            not_cells['circularity'].values
+            not_cells['circularity'].values,
+            current_circularity_min,
+            current_circularity_max
         )
         
         # Add validation
