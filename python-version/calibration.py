@@ -30,14 +30,22 @@ class ProjectorCameraCalibration:
         # Store screen circle parameters
         scale_x = self.projector_width / 2560
         scale_y = self.projector_height / 1600
-        self.screen_circle_x = int(1000 * scale_x)
-        self.screen_circle_y = int(1200 * scale_y)
-        self.screen_circle_radius = int(80 * min(scale_x, scale_y))
+        
+        # First circle (larger)
+        self.screen_circle1_x = int(1000 * scale_x)
+        self.screen_circle1_y = int(1200 * scale_y)
+        self.screen_circle1_radius = int(80 * min(scale_x, scale_y))
+        
+        # Second circle (smaller)
+        self.screen_circle2_x = int((1000 + 200) * scale_x)  # 200 pixels to the right
+        self.screen_circle2_y = int(1200 * scale_y)  # Same y coordinate
+        self.screen_circle2_radius = int(40 * min(scale_x, scale_y))
         
         # Initialize calibration parameters
         self.calibration_scale = None
         self.calibration_offset_x = None
         self.calibration_offset_y = None
+        self.calibration_rotation = None
         self.fov_screen_corners = None
         
         self.create_windows()
@@ -68,10 +76,29 @@ class ProjectorCameraCalibration:
                               highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
         
-        # Draw black circle at scaled coordinates
-        self.canvas.create_oval(scaled_x - scaled_radius, scaled_y - scaled_radius,
-                              scaled_x + scaled_radius, scaled_y + scaled_radius,
-                              fill='black', outline='black')
+        # Draw first black circle (larger)
+        self.canvas.create_oval(
+            self.screen_circle1_x - self.screen_circle1_radius,
+            self.screen_circle1_y - self.screen_circle1_radius,
+            self.screen_circle1_x + self.screen_circle1_radius,
+            self.screen_circle1_y + self.screen_circle1_radius,
+            fill='black', outline='black'
+        )
+        
+        # Draw second black circle (smaller)
+        self.canvas.create_oval(
+            self.screen_circle2_x - self.screen_circle2_radius,
+            self.screen_circle2_y - self.screen_circle2_radius,
+            self.screen_circle2_x + self.screen_circle2_radius,
+            self.screen_circle2_y + self.screen_circle2_radius,
+            fill='black', outline='black'
+        )
+        
+        # Add rotation indicator line
+        line_length = scaled_radius * 0.8
+        self.canvas.create_line(scaled_x, scaled_y,
+                              scaled_x + line_length, scaled_y,
+                              fill='white', width=2)
         
         # Create camera window
         cv2.namedWindow("Camera View", cv2.WINDOW_NORMAL)
@@ -104,44 +131,55 @@ class ProjectorCameraCalibration:
         style.configure('Accent.TButton', foreground='red')
         
     def detect_circle(self, frame):
-        """Detect black circle in the camera frame"""
+        """Detect two black circles in the camera frame"""
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        cv2.imshow("1. Grayscale", gray)
         
-        # Threshold to get binary image
+        # Threshold to get binary image for black circles
         _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
+        cv2.imshow("2. Black Circles Binary", binary)
         
         # Find contours
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Find the largest contour
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            area = cv2.contourArea(largest_contour)
-            
-            # If contour is large enough and roughly circular
-            if area > 100:
+        # Sort contours by area (largest first)
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        
+        result = frame.copy()
+        circles_found = []
+        
+        # Try to find two circles
+        for contour in contours[:2]:  # Look at the two largest contours
+            area = cv2.contourArea(contour)
+            if area > 100:  # Minimum area threshold
                 # Fit circle to contour
-                (x, y), radius = cv2.minEnclosingCircle(largest_contour)
+                (x, y), radius = cv2.minEnclosingCircle(contour)
                 center = (int(x), int(y))
                 radius = int(radius)
                 
-                # Draw the circle
-                result = frame.copy()
+                # Draw the circle and its center
                 cv2.circle(result, center, radius, (0, 255, 0), 2)
                 cv2.circle(result, center, 2, (0, 0, 255), 3)
-                return result, center, radius
                 
-        return frame, None, None
+                circles_found.append((center, radius))
+        
+        if len(circles_found) == 2:
+            # Sort circles by x-coordinate
+            circles_found.sort(key=lambda x: x[0][0])
+            # print("\nDetected circles:")
+            # print(f"Circle 1 (larger) - Center: {circles_found[0][0]}, Radius: {circles_found[0][1]}")
+            # print(f"Circle 2 (smaller) - Center: {circles_found[1][0]}, Radius: {circles_found[1][1]}")
+            return result, circles_found[0][0], circles_found[0][1], circles_found[1][0], circles_found[1][1]
+        
+        return result, None, None, None, None
         
     def update_camera_view(self):
         """Update camera view continuously"""
         ret, frame = self.cap.read()
         if ret:
-            # Detect and mark circle
-            marked_frame, center, radius = self.detect_circle(frame)
-            # if center and radius:
-            #     print(f"Camera circle detected - Center: {center}, Radius: {radius}")
+            # Detect and mark circles
+            marked_frame, center1, radius1, center2, radius2 = self.detect_circle(frame)
             cv2.imshow("Camera View", marked_frame)
             cv2.waitKey(1)
         
@@ -152,18 +190,31 @@ class ProjectorCameraCalibration:
         """Triggered when calibration button is clicked"""
         ret, frame = self.cap.read()
         if ret:
-            marked_frame, center, radius = self.detect_circle(frame)
-            if center and radius:
-                print("\nCalibration circle recorded:")
-                print(f"  Camera circle - Center: {center}, Radius: {radius}")
-                print(f"  Screen circle - Center: ({self.screen_circle_x}, {self.screen_circle_y}), Radius: {self.screen_circle_radius}")
+            marked_frame, center1, radius1, center2, radius2 = self.detect_circle(frame)
+            if center1 and center2:
+                print("\nCalibration circles recorded:")
+                print(f"Circle 1 (larger) - Center: {center1}, Radius: {radius1}")
+                print(f"Circle 2 (smaller) - Center: {center2}, Radius: {radius2}")
+                print(f"Screen circles - Large: ({self.screen_circle1_x}, {self.screen_circle1_y}), R={self.screen_circle1_radius}")
+                print(f"              - Small: ({self.screen_circle2_x}, {self.screen_circle2_y}), R={self.screen_circle2_radius}")
                 
-                # Calculate scale factor (screen/camera)
-                self.calibration_scale = self.screen_circle_radius / radius
+                # Calculate scale factor using the larger circle
+                self.calibration_scale = self.screen_circle1_radius / radius1
                 
-                # Calculate offset between screen and camera centers
-                self.calibration_offset_x = self.screen_circle_x - center[0] * self.calibration_scale
-                self.calibration_offset_y = self.screen_circle_y - center[1] * self.calibration_scale
+                # Calculate offset between screen and camera centers using the larger circle
+                self.calibration_offset_x = self.screen_circle1_x - center1[0] * self.calibration_scale
+                self.calibration_offset_y = self.screen_circle1_y - center1[1] * self.calibration_scale
+                
+                # Calculate rotation angle from the two circles
+                dx_camera = center2[0] - center1[0]
+                dy_camera = center2[1] - center1[1]
+                camera_angle = np.degrees(np.arctan2(dy_camera, dx_camera))
+                
+                dx_screen = self.screen_circle2_x - self.screen_circle1_x
+                dy_screen = self.screen_circle2_y - self.screen_circle1_y
+                screen_angle = np.degrees(np.arctan2(dy_screen, dx_screen))
+                
+                self.calibration_rotation = camera_angle - screen_angle
                 
                 # Calculate FOV corners in camera coordinates
                 camera_corners = [
@@ -173,11 +224,26 @@ class ProjectorCameraCalibration:
                     (0, self.camera_height)  # Bottom-left
                 ]
                 
-                # Transform corners to screen coordinates
+                # Transform corners to screen coordinates with rotation
                 self.fov_screen_corners = []
+                angle_rad = np.radians(-self.calibration_rotation)  # Negative angle to correct the rotation
+                rotation_matrix = np.array([
+                    [np.cos(angle_rad), -np.sin(angle_rad)],
+                    [np.sin(angle_rad), np.cos(angle_rad)]
+                ])
+                
+                center_x, center_y = center1
                 for cx, cy in camera_corners:
-                    screen_x = int(cx * self.calibration_scale + self.calibration_offset_x)
-                    screen_y = int(cy * self.calibration_scale + self.calibration_offset_y)
+                    # Translate point relative to circle center
+                    px = cx - center_x
+                    py = cy - center_y
+                    
+                    # Apply rotation
+                    rotated = np.dot(rotation_matrix, np.array([px, py]))
+                    
+                    # Scale and translate back
+                    screen_x = int(rotated[0] * self.calibration_scale + self.screen_circle1_x)
+                    screen_y = int(rotated[1] * self.calibration_scale + self.screen_circle1_y)
                     self.fov_screen_corners.append((screen_x, screen_y))
                 
                 # Clear previous FOV outline if any
@@ -194,13 +260,14 @@ class ProjectorCameraCalibration:
                 print(f"  Scale factor: {self.calibration_scale:.3f}")
                 print(f"  Offset X: {self.calibration_offset_x:.1f} pixels")
                 print(f"  Offset Y: {self.calibration_offset_y:.1f} pixels")
+                print(f"  Rotation angle: {self.calibration_rotation:.1f}°")
                 print("\nField of View on Screen:")
                 print(f"  Top-left: {self.fov_screen_corners[0]}")
                 print(f"  Top-right: {self.fov_screen_corners[1]}")
                 print(f"  Bottom-right: {self.fov_screen_corners[2]}")
                 print(f"  Bottom-left: {self.fov_screen_corners[3]}")
             else:
-                print("\nNo circle detected during calibration")
+                print("\nNo circles detected during calibration")
             cv2.imshow("Camera View", marked_frame)
             cv2.waitKey(1)
         
