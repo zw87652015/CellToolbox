@@ -17,6 +17,7 @@ class UnifiedUI:
         self.cell_detection_window.title("Cell Detection View")
         self.cell_detection_window.geometry("640x480")
         self.cell_detection_window.minsize(320, 240)
+        self.cell_detection_window.attributes('-topmost', True)  # Make window stay on top
         
         self.white_rectangles_window = tk.Toplevel(self.root)
         self.white_rectangles_window.title("White Rectangles View")

@@ -5,6 +5,7 @@ import sys
 import tkinter as tk
 from parameter_control import UnifiedUI
 import os
+import json
 
 # Global variables for cell tracking and persistence
 CAMERASELECTED = 1  # 0~infinity for USB camera index
@@ -13,6 +14,125 @@ cell_lifetimes = []  # List to track the remaining frames each cell will be disp
 CELL_MEMORY_FRAMES = 5  # Number of frames to keep tracking a cell after it disappears
 MAX_MOVEMENT = 200  # Maximum allowed pixel distance for cell movement between frames
 DISTANCE_THRESHOLD = 50  # Maximum distance threshold for cell identity matching
+SCREEN_WIDTH = 2560  # Screen width in pixels
+SCREEN_HEIGHT = 1600  # Screen height in pixels
+
+def load_calibration_data():
+    """Load the latest calibration data"""
+    try:
+        with open('calibration/latest_calibration.json', 'r') as f:
+            data = json.load(f)
+            # Verify required fields
+            required_fields = ['scale', 'rotation', 'offset_x', 'offset_y', 
+                             'camera_resolution', 'projector_resolution', 'fov_corners']
+            if all(field in data for field in required_fields):
+                return data
+            else:
+                print("Error: Calibration data is missing required fields")
+                return None
+    except FileNotFoundError:
+        print("Error: No calibration data found. Please run calibration first.")
+        return None
+    except json.JSONDecodeError:
+        print("Error: Invalid calibration data format")
+        return None
+
+def transform_point(x, y, calibration_data):
+    """Transform a point from camera coordinates to screen coordinates"""
+    # Get calibration parameters
+    scale = calibration_data['scale']
+    rotation = calibration_data['rotation']
+    offset_x = calibration_data['offset_x']
+    offset_y = calibration_data['offset_y']
+    
+    # Apply rotation
+    rx = x * np.cos(rotation) - y * np.sin(rotation)
+    ry = x * np.sin(rotation) + y * np.cos(rotation)
+    
+    # Apply scale and offset
+    screen_x = int(rx * scale + offset_x)
+    screen_y = int(ry * scale + offset_y)
+    
+    return screen_x, screen_y
+
+def update_display(canvas, white_window, calibration_data):
+    """Update the display with the white rectangles confined to the FOV"""
+    # Clear previous content
+    canvas.delete("all")
+    
+    if calibration_data is None:
+        return
+    
+    # Ensure white_window is uint8
+    if white_window.dtype != np.uint8:
+        white_window = (white_window * 255).astype(np.uint8)
+    
+    # Get FOV corners
+    fov_corners = calibration_data['fov_corners']
+    
+    # Draw FOV outline
+    canvas.create_polygon(
+        [coord for corner in fov_corners for coord in corner],
+        fill='black',
+        outline='white',
+        width=1
+    )
+    
+    # Get camera resolution from calibration
+    cam_width = calibration_data['camera_resolution']['width']
+    cam_height = calibration_data['camera_resolution']['height']
+    
+    # Create source points (camera view corners)
+    src_points = np.array([
+        [0, 0],                  # Top-left
+        [cam_width, 0],          # Top-right
+        [cam_width, cam_height], # Bottom-right
+        [0, cam_height]          # Bottom-left
+    ], dtype=np.float32)
+    
+    # Create destination points from FOV corners
+    dst_points = np.array(fov_corners, dtype=np.float32)
+    
+    # Calculate perspective transform matrix
+    transform_matrix = cv2.getPerspectiveTransform(src_points, dst_points)
+    
+    # Resize white_window to match camera resolution if needed
+    if white_window.shape[:2] != (cam_height, cam_width):
+        white_window = cv2.resize(white_window, (cam_width, cam_height))
+    
+    # Apply perspective transform to white_window
+    transformed_window = cv2.warpPerspective(
+        white_window,
+        transform_matrix,
+        (SCREEN_WIDTH, SCREEN_HEIGHT)
+    )
+    
+    # Draw white points where transformed window is white
+    white_coords = np.where(transformed_window > 0)
+    for y, x in zip(white_coords[0], white_coords[1]):
+        canvas.create_rectangle(x, y, x+1, y+1, fill='white', outline='white')
+    
+    # Update the window
+    canvas.update()
+
+def create_display_window():
+    """Create a full screen window for display"""
+    # Create window
+    window = tk.Tk()
+    window.attributes('-fullscreen', True)
+    window.attributes('-topmost', True)  # Keep window on top
+    
+    # Create canvas
+    canvas = tk.Canvas(
+        window,
+        width=SCREEN_WIDTH,
+        height=SCREEN_HEIGHT,
+        bg='black',
+        highlightthickness=0
+    )
+    canvas.pack(fill='both', expand=True)
+    
+    return window, canvas
 
 def calculate_iou(box1, box2):
     """Calculate Intersection over Union (IoU) between two bounding boxes.
@@ -372,14 +492,32 @@ def process_frame_debug(frame, output_dir, clahe_clip_limit=2.5, clahe_tile_size
 
 def main():
     """Main function to run the cell detection and tracking system."""
-    # Initialize video capture
+    # Load calibration data with proper error handling
+    calibration_data = load_calibration_data()
+    if calibration_data is None:
+        print("Error: Please run calibration first")
+        return
+        
+    # Verify camera resolution matches calibration
     cap = cv2.VideoCapture(CAMERASELECTED)
     if not cap.isOpened():
         print(f"Error: Could not open camera {CAMERASELECTED}")
         return
     
-    # Initialize UI
+    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cal_width = calibration_data['camera_resolution']['width']
+    cal_height = calibration_data['camera_resolution']['height']
+    
+    if actual_width != cal_width or actual_height != cal_height:
+        print(f"Warning: Current camera resolution ({actual_width}x{actual_height}) "
+              f"differs from calibration ({cal_width}x{cal_height})")
+    
+    # Initialize UI for parameters
     ui = UnifiedUI()
+    
+    # Create display window
+    window, canvas = create_display_window()
     
     while not ui.quit_flag:
         # Read frame
@@ -394,12 +532,20 @@ def main():
         # Process frame
         display_frame, white_window, _ = process_frame(frame, ui.get_parameters())
         
-        # Update UI
+        # Update UI with both camera view and white window
         ui.update_video_display(display_frame, white_window)
+        
+        # Update projector display
+        update_display(canvas, white_window, calibration_data)
+        
+        # Check for 'q' key to quit
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
     
     # Clean up
     cap.release()
     cv2.destroyAllWindows()
+    window.destroy()
 
 if __name__ == "__main__":
     main()
