@@ -14,11 +14,11 @@ class ProjectorCameraCalibration:
         
         print(f"Screen resolution: {self.projector_width}x{self.projector_height}")
         
-        self.camera_width = 800
-        self.camera_height = 600
+        self.camera_width = 640
+        self.camera_height = 480
         
         # Initialize camera
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(1)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
         
@@ -132,12 +132,21 @@ class ProjectorCameraCalibration:
         
     def detect_circle(self, frame):
         """Detect two black circles in the camera frame"""
+        # Flip the frame horizontally
+        frame = cv2.flip(frame, 1)
+        
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         cv2.imshow("1. Grayscale", gray)
         
-        # Threshold to get binary image for black circles
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
+        # Use Otsu's thresholding
+        _, binary = cv2.threshold(
+            gray,
+            0,  # This value is ignored when using THRESH_OTSU
+            255,
+            cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        )
+        
         cv2.imshow("2. Black Circles Binary", binary)
         
         # Find contours
@@ -158,18 +167,20 @@ class ProjectorCameraCalibration:
                 center = (int(x), int(y))
                 radius = int(radius)
                 
-                # Draw the circle and its center
-                cv2.circle(result, center, radius, (0, 255, 0), 2)
-                cv2.circle(result, center, 2, (0, 0, 255), 3)
+                # Calculate circularity
+                perimeter = cv2.arcLength(contour, True)
+                circularity = 4 * np.pi * area / (perimeter * perimeter)
                 
-                circles_found.append((center, radius))
+                # Only accept if the shape is reasonably circular
+                if circularity > 0.7:  # Perfect circle has circularity of 1.0
+                    # Draw the circle and its center
+                    cv2.circle(result, center, radius, (0, 255, 0), 2)
+                    cv2.circle(result, center, 2, (0, 0, 255), 3)
+                    circles_found.append((center, radius))
         
         if len(circles_found) == 2:
             # Sort circles by x-coordinate
             circles_found.sort(key=lambda x: x[0][0])
-            # print("\nDetected circles:")
-            # print(f"Circle 1 (larger) - Center: {circles_found[0][0]}, Radius: {circles_found[0][1]}")
-            # print(f"Circle 2 (smaller) - Center: {circles_found[1][0]}, Radius: {circles_found[1][1]}")
             return result, circles_found[0][0], circles_found[0][1], circles_found[1][0], circles_found[1][1]
         
         return result, None, None, None, None
@@ -198,24 +209,22 @@ class ProjectorCameraCalibration:
                 print(f"Screen circles - Large: ({self.screen_circle1_x}, {self.screen_circle1_y}), R={self.screen_circle1_radius}")
                 print(f"              - Small: ({self.screen_circle2_x}, {self.screen_circle2_y}), R={self.screen_circle2_radius}")
                 
-                # Calculate scale factor using the larger circle
-                self.calibration_scale = self.screen_circle1_radius / radius1
+                # Calculate scale factor using the distance between circles
+                camera_distance = np.sqrt((center2[0] - center1[0])**2 + (center2[1] - center1[1])**2)
+                screen_distance = np.sqrt((self.screen_circle2_x - self.screen_circle1_x)**2 + 
+                                       (self.screen_circle2_y - self.screen_circle1_y)**2)
+                self.calibration_scale = screen_distance / camera_distance
                 
-                # Calculate offset between screen and camera centers using the larger circle
+                # Calculate rotation angle
+                camera_angle = np.arctan2(center2[1] - center1[1], center2[0] - center1[0])
+                screen_angle = np.arctan2(self.screen_circle2_y - self.screen_circle1_y,
+                                        self.screen_circle2_x - self.screen_circle1_x)
+                self.calibration_rotation = screen_angle - camera_angle
+                
+                # Calculate offset
                 self.calibration_offset_x = self.screen_circle1_x - center1[0] * self.calibration_scale
                 self.calibration_offset_y = self.screen_circle1_y - center1[1] * self.calibration_scale
-                
-                # Calculate rotation angle from the two circles
-                dx_camera = center2[0] - center1[0]
-                dy_camera = center2[1] - center1[1]
-                camera_angle = np.degrees(np.arctan2(dy_camera, dx_camera))
-                
-                dx_screen = self.screen_circle2_x - self.screen_circle1_x
-                dy_screen = self.screen_circle2_y - self.screen_circle1_y
-                screen_angle = np.degrees(np.arctan2(dy_screen, dx_screen))
-                
-                self.calibration_rotation = camera_angle - screen_angle
-                
+
                 # Calculate FOV corners in camera coordinates
                 camera_corners = [
                     (0, 0),  # Top-left
@@ -224,53 +233,93 @@ class ProjectorCameraCalibration:
                     (0, self.camera_height)  # Bottom-left
                 ]
                 
-                # Transform corners to screen coordinates with rotation
+                # Transform corners to screen coordinates
                 self.fov_screen_corners = []
-                angle_rad = np.radians(-self.calibration_rotation)  # Negative angle to correct the rotation
-                rotation_matrix = np.array([
-                    [np.cos(angle_rad), -np.sin(angle_rad)],
-                    [np.sin(angle_rad), np.cos(angle_rad)]
-                ])
-                
-                center_x, center_y = center1
                 for cx, cy in camera_corners:
-                    # Translate point relative to circle center
-                    px = cx - center_x
-                    py = cy - center_y
+                    # First apply scale and rotation
+                    dx = cx - center1[0]
+                    dy = cy - center1[1]
                     
-                    # Apply rotation
-                    rotated = np.dot(rotation_matrix, np.array([px, py]))
+                    # Rotate
+                    rx = dx * np.cos(self.calibration_rotation) - dy * np.sin(self.calibration_rotation)
+                    ry = dx * np.sin(self.calibration_rotation) + dy * np.cos(self.calibration_rotation)
                     
-                    # Scale and translate back
-                    screen_x = int(rotated[0] * self.calibration_scale + self.screen_circle1_x)
-                    screen_y = int(rotated[1] * self.calibration_scale + self.screen_circle1_y)
+                    # Scale and translate
+                    screen_x = int(rx * self.calibration_scale + self.screen_circle1_x)
+                    screen_y = int(ry * self.calibration_scale + self.screen_circle1_y)
                     self.fov_screen_corners.append((screen_x, screen_y))
                 
-                # Clear previous FOV outline if any
+                # Clear previous FOV outline
                 self.canvas.delete("fov")
                 
-                # Draw FOV outline on screen
+                # Draw new FOV outline on screen
                 for i in range(len(self.fov_screen_corners)):
                     start = self.fov_screen_corners[i]
                     end = self.fov_screen_corners[(i + 1) % len(self.fov_screen_corners)]
                     self.canvas.create_line(start[0], start[1], end[0], end[1],
                                          fill='red', width=2, tags="fov")
                 
+                # Save calibration data to file
+                calibration_data = {
+                    'scale': float(self.calibration_scale),
+                    'rotation': float(self.calibration_rotation),
+                    'offset_x': float(self.calibration_offset_x),
+                    'offset_y': float(self.calibration_offset_y),
+                    'camera_resolution': {
+                        'width': self.camera_width,
+                        'height': self.camera_height
+                    },
+                    'projector_resolution': {
+                        'width': self.projector_width,
+                        'height': self.projector_height
+                    },
+                    'fov_corners': self.fov_screen_corners,
+                    'calibration_time': self.get_current_time()
+                }
+                
+                self.save_calibration_data(calibration_data)
+                
                 print("\nCamera-Screen Transformation Parameters:")
                 print(f"  Scale factor: {self.calibration_scale:.3f}")
                 print(f"  Offset X: {self.calibration_offset_x:.1f} pixels")
                 print(f"  Offset Y: {self.calibration_offset_y:.1f} pixels")
-                print(f"  Rotation angle: {self.calibration_rotation:.1f}°")
+                print(f"  Rotation angle: {np.degrees(self.calibration_rotation):.1f}°")
                 print("\nField of View on Screen:")
                 print(f"  Top-left: {self.fov_screen_corners[0]}")
                 print(f"  Top-right: {self.fov_screen_corners[1]}")
                 print(f"  Bottom-right: {self.fov_screen_corners[2]}")
                 print(f"  Bottom-left: {self.fov_screen_corners[3]}")
+                
+                print("\nCalibration data saved successfully!")
             else:
-                print("\nNo circles detected during calibration")
+                print("Could not detect both calibration circles clearly. Please adjust the camera or lighting.")
             cv2.imshow("Camera View", marked_frame)
             cv2.waitKey(1)
         
+    def get_current_time(self):
+        """Get current time in ISO format"""
+        from datetime import datetime
+        return datetime.now().isoformat()
+    
+    def save_calibration_data(self, data):
+        """Save calibration data to a JSON file"""
+        import json
+        import os
+        
+        # Create calibration directory if it doesn't exist
+        os.makedirs('calibration', exist_ok=True)
+        
+        # Save to a timestamped file
+        filename = os.path.join('calibration', f'calibration_{data["calibration_time"].replace(":", "-")}.json')
+        
+        with open(filename, 'w') as f:
+            json.dump(data, f, indent=4)
+            
+        # Also save to a 'latest' file
+        latest_file = os.path.join('calibration', 'latest_calibration.json')
+        with open(latest_file, 'w') as f:
+            json.dump(data, f, indent=4)
+            
     def cleanup_and_close(self):
         """Clean up resources and close the application"""
         self.cleanup()
