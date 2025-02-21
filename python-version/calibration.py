@@ -18,7 +18,7 @@ class ProjectorCameraCalibration:
         self.camera_height = 480
         
         # Initialize camera
-        self.cap = cv2.VideoCapture(1)
+        self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
         

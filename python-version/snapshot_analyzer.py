@@ -18,6 +18,7 @@ class SnapshotAnalyzer:
         self.window = tk.Toplevel(self.master)
         self.window.title("Snapshot Analysis Results")
         self.window.geometry("800x600")
+        self.window.attributes('-topmost', True)  # Make analysis window stay on top
         
         # Add Calculate Thresholds button at the top
         self.calc_button = ttk.Button(
@@ -54,6 +55,7 @@ class SnapshotAnalyzer:
         """Create a dialog for labeling detected regions"""
         dialog = tk.Toplevel(self.master)
         dialog.title("Label Detected Regions")
+        dialog.attributes('-topmost', True)  # Make analysis window stay on top
         dialog.geometry("1200x800")
         
         # Create main container

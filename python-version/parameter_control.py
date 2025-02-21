@@ -11,16 +11,18 @@ class UnifiedUI:
         self.root.title("Cell Detection Control Panel")
         self.root.geometry("400x600")
         self.root.minsize(350, 500)
+        self.root.attributes('-topmost', True)  # Make main window stay on top
         
         # Create separate windows for video displays
         self.cell_detection_window = tk.Toplevel(self.root)
         self.cell_detection_window.title("Cell Detection View")
         self.cell_detection_window.geometry("640x480")
         self.cell_detection_window.minsize(320, 240)
-        self.cell_detection_window.attributes('-topmost', True)  # Make window stay on top
+        self.cell_detection_window.attributes('-topmost', True)  # Make cell detection window stay on top
         
         self.white_rectangles_window = tk.Toplevel(self.root)
         self.white_rectangles_window.title("White Rectangles View")
+        self.white_rectangles_window.withdraw()  # Start with window hidden
         
         # Get screen width and height
         screen_width = self.white_rectangles_window.winfo_screenwidth()
@@ -28,7 +30,7 @@ class UnifiedUI:
         
         # Initialize in fullscreen mode
         self.white_rectangles_window.attributes('-fullscreen', True)
-        self.white_rectangles_window.attributes('-topmost', True)
+        self.white_rectangles_window.attributes('-topmost', False)  # Disable always on top
         
         # Add key binding to exit fullscreen (Escape key)
         def toggle_fullscreen(event=None):
