@@ -6,8 +6,8 @@ def read_usb_capture():
     # 选择摄像头的编号
     cap = cv2.VideoCapture(1)
     # 设置摄像头分辨率
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1024)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 576)
     
     # 获取实际的分辨率
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
