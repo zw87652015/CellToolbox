@@ -14,11 +14,11 @@ class ProjectorCameraCalibration:
         
         print(f"Screen resolution: {self.projector_width}x{self.projector_height}")
         
-        self.camera_width = 640
-        self.camera_height = 480
+        self.camera_width = 1024
+        self.camera_height = 576
         
         # Initialize camera
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(1)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
         
@@ -139,15 +139,21 @@ class ProjectorCameraCalibration:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         cv2.imshow("1. Grayscale", gray)
         
-        # Use Otsu's thresholding
-        _, binary = cv2.threshold(
+        # Use adaptive thresholding instead of Otsu's
+        binary = cv2.adaptiveThreshold(
             gray,
-            0,  # This value is ignored when using THRESH_OTSU
             255,
-            cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            21,  # Block size
+            5    # C constant
         )
         
-        cv2.imshow("2. Black Circles Binary", binary)
+        # Optional: Add morphological operations to clean up noise
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+        
+        cv2.imshow("2. Binary", binary)
         
         # Find contours
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -159,9 +165,9 @@ class ProjectorCameraCalibration:
         circles_found = []
         
         # Try to find two circles
-        for contour in contours[:2]:  # Look at the two largest contours
+        for contour in contours[:4]:  # Look at the four largest contours
             area = cv2.contourArea(contour)
-            if area > 100:  # Minimum area threshold
+            if area > 50:  # Lower minimum area threshold
                 # Fit circle to contour
                 (x, y), radius = cv2.minEnclosingCircle(contour)
                 center = (int(x), int(y))
@@ -172,11 +178,18 @@ class ProjectorCameraCalibration:
                 circularity = 4 * np.pi * area / (perimeter * perimeter)
                 
                 # Only accept if the shape is reasonably circular
-                if circularity > 0.7:  # Perfect circle has circularity of 1.0
-                    # Draw the circle and its center
-                    cv2.circle(result, center, radius, (0, 255, 0), 2)
-                    cv2.circle(result, center, 2, (0, 0, 255), 3)
-                    circles_found.append((center, radius))
+                if circularity > 0.6:  # Slightly relaxed circularity threshold
+                    # Calculate contour solidity
+                    hull = cv2.convexHull(contour)
+                    hull_area = cv2.contourArea(hull)
+                    solidity = float(area) / hull_area
+                    
+                    # Additional check for solidity
+                    if solidity > 0.8:
+                        # Draw the circle and its center
+                        cv2.circle(result, center, radius, (0, 255, 0), 2)
+                        cv2.circle(result, center, 2, (0, 0, 255), 3)
+                        circles_found.append((center, radius))
         
         if len(circles_found) == 2:
             # Sort circles by x-coordinate
