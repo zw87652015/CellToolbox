@@ -2,6 +2,15 @@ import pygame
 import json
 import numpy as np
 import sys
+import ctypes
+
+# Win32 constants
+HWND_TOPMOST = -1
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+
+# Win32 API functions
+SetWindowPos = ctypes.windll.user32.SetWindowPos
 
 def load_calibration_data():
     """Load the latest calibration data"""
@@ -39,6 +48,10 @@ def main():
     screen = pygame.display.set_mode((2560, 1600), pygame.FULLSCREEN | pygame.NOFRAME)
     pygame.display.set_caption("Manual Rectangle Tool")
     
+    # Get window handle and set it to stay on top (simpler approach)
+    hwnd = pygame.display.get_wm_info()['window']
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+    
     # Rectangle state
     rect = pygame.Rect(screen_width//4, screen_height//4, 200, 200)  # Initial rectangle
     dragging = False
@@ -47,6 +60,8 @@ def main():
     
     # Main loop
     running = True
+    clock = pygame.time.Clock()
+    
     while running:
         # Fill screen with black
         screen.fill((0, 0, 0))
@@ -97,6 +112,7 @@ def main():
         
         # Update display
         pygame.display.flip()
+        clock.tick(60)
     
     # Cleanup
     pygame.quit()
