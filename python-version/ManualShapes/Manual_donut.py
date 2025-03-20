@@ -83,7 +83,7 @@ def main():
     SCALE_DELAY_MAX = 3  # Only apply scaling every 3 frames
     
     # Colors
-    BLACK = (0, 0, 0)
+    BLACK = (60, 60, 60)
     WHITE = (255, 255, 255)
     RED = (255, 0, 0)
     GREEN = (0, 255, 0)
