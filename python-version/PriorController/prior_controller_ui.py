@@ -191,12 +191,18 @@ class PriorControllerUI:
         # Update all widgets in notebook
         for child in self.root.winfo_children():
             if isinstance(child, ttk.Frame):
-                for widget in child.winfo_descendants():
-                    if widget != self.connect_btn and not isinstance(widget, ttk.Label):
-                        try:
-                            widget.config(state=state)
-                        except:
-                            pass
+                self._update_widget_state(child, state)
+    
+    def _update_widget_state(self, parent, state):
+        """Recursively update widget states."""
+        for child in parent.winfo_children():
+            if child != self.connect_btn and not isinstance(child, ttk.Label):
+                try:
+                    child.config(state=state)
+                except:
+                    pass
+            if hasattr(child, 'winfo_children') and callable(child.winfo_children):
+                self._update_widget_state(child, state)
     
     def toggle_connection(self):
         """Connect to or disconnect from the controller."""

@@ -7,7 +7,7 @@ Main entry point for the Prior Controller application.
 import os
 import sys
 import tkinter as tk
-from prior_controller_ui import PriorControllerUI
+from prior_controller_ui_fixed import PriorControllerUI
 
 def main():
     """Main function to start the application."""
