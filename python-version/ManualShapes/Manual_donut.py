@@ -4,6 +4,7 @@ import numpy as np
 import sys
 import ctypes
 import math
+import os
 
 # Win32 constants
 HWND_TOPMOST = -1
@@ -12,6 +13,134 @@ SWP_NOMOVE = 0x0002
 
 # Win32 API functions
 SetWindowPos = ctypes.windll.user32.SetWindowPos
+
+class Donut:
+    def __init__(self, x, y, outer_radius=150, inner_radius=75, visible=True):
+        self.center_x = x
+        self.center_y = y
+        self.outer_radius = outer_radius
+        self.inner_radius = inner_radius
+        self.visible = visible
+        self.dragging_center = False
+        self.dragging_outer = False
+        self.dragging_inner = False
+        self.drag_start_pos = (0, 0)
+        self.drag_start_radius_outer = outer_radius
+        self.drag_start_radius_inner = inner_radius
+        
+    def is_point_inside(self, x, y):
+        """Check if a point is inside the donut"""
+        dx = x - self.center_x
+        dy = y - self.center_y
+        distance = math.sqrt(dx*dx + dy*dy)
+        return self.inner_radius < distance < self.outer_radius
+    
+    def is_point_inside_inner_circle(self, x, y):
+        """Check if a point is inside the inner circle of the donut"""
+        dx = x - self.center_x
+        dy = y - self.center_y
+        distance = math.sqrt(dx*dx + dy*dy)
+        return distance < self.inner_radius
+    
+    def is_point_on_inner_border(self, x, y, tolerance=10):
+        """Check if a point is on the inner border of the donut"""
+        dx = x - self.center_x
+        dy = y - self.center_y
+        distance = math.sqrt(dx*dx + dy*dy)
+        return abs(distance - self.inner_radius) < tolerance
+    
+    def is_point_on_outer_border(self, x, y, tolerance=10):
+        """Check if a point is on the outer border of the donut"""
+        dx = x - self.center_x
+        dy = y - self.center_y
+        distance = math.sqrt(dx*dx + dy*dy)
+        return abs(distance - self.outer_radius) < tolerance
+    
+    def is_point_over_donut(self, x, y, tolerance=10):
+        """Check if a point is over any part of the donut (inside or on borders)"""
+        dx = x - self.center_x
+        dy = y - self.center_y
+        distance = math.sqrt(dx*dx + dy*dy)
+        return (distance < self.outer_radius + tolerance)
+    
+    def scale(self, scale_up, factor, min_inner_radius, min_radius_gap, max_outer_radius):
+        """Scale the donut while maintaining thickness"""
+        # Calculate current thickness (absolute value)
+        thickness = self.outer_radius - self.inner_radius
+        
+        if scale_up:
+            # Increase outer radius
+            new_outer = min(self.outer_radius * (1 + factor), max_outer_radius)
+            # Maintain absolute thickness
+            new_inner = new_outer - thickness
+        else:
+            # Decrease outer radius
+            new_outer = max(self.outer_radius * (1 - factor), thickness + min_inner_radius)
+            # Maintain absolute thickness
+            new_inner = new_outer - thickness
+        
+        # Ensure inner radius doesn't go below minimum
+        new_inner = max(new_inner, min_inner_radius)
+        
+        # Update radii
+        self.outer_radius = new_outer
+        self.inner_radius = new_inner
+    
+    def move(self, dx, dy):
+        """Move the donut by the specified delta"""
+        self.center_x += dx
+        self.center_y += dy
+    
+    def resize_outer(self, new_distance, min_radius_gap, max_outer_radius):
+        """Resize the outer radius"""
+        # Ensure outer radius is at least min_radius_gap larger than inner radius
+        # and not larger than max_outer_radius
+        self.outer_radius = max(min(new_distance, max_outer_radius), self.inner_radius + min_radius_gap)
+    
+    def resize_inner(self, new_distance, min_inner_radius, min_radius_gap):
+        """Resize the inner radius"""
+        # Ensure inner radius is at least min_inner_radius
+        # and at most (outer_radius - min_radius_gap)
+        self.inner_radius = max(min(new_distance, self.outer_radius - min_radius_gap), min_inner_radius)
+    
+    def draw(self, screen, WHITE, BLACK, YELLOW, selected):
+        """Draw the donut on the screen"""
+        if self.visible:
+            # Draw the donut (filled white ring)
+            pygame.draw.circle(screen, YELLOW if selected else WHITE, (int(self.center_x), int(self.center_y)), int(self.outer_radius))  # Outer circle (filled)
+            pygame.draw.circle(screen, BLACK, (int(self.center_x), int(self.center_y)), int(self.inner_radius))  # Inner circle (cuts out center)
+            
+            # Draw the borders of the circles for better visibility during editing
+            pygame.draw.circle(screen, YELLOW if selected else WHITE, (int(self.center_x), int(self.center_y)), int(self.outer_radius), 2)  # Outer border
+            pygame.draw.circle(screen, YELLOW if selected else WHITE, (int(self.center_x), int(self.center_y)), int(self.inner_radius), 2)  # Inner border
+        else:
+            # Draw just the outer circle line to show where the hidden donut is
+            color = YELLOW if selected else WHITE
+            line_thickness = 1  # Thin line
+            
+            # Draw the outer circle only
+            pygame.draw.circle(screen, color, (int(self.center_x), int(self.center_y)), int(self.outer_radius), line_thickness)
+    
+    def to_dict(self):
+        """Convert donut to dictionary for saving"""
+        return {
+            "center_x": self.center_x,
+            "center_y": self.center_y,
+            "outer_radius": self.outer_radius,
+            "inner_radius": self.inner_radius,
+            "visible": self.visible
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        """Create donut from dictionary"""
+        return cls(
+            data["center_x"],
+            data["center_y"],
+            data["outer_radius"],
+            data["inner_radius"],
+            data.get("visible", True)  # Default to visible if not specified
+        )
 
 def load_calibration_data():
     """Load the latest calibration data"""
@@ -53,25 +182,39 @@ def main():
     hwnd = pygame.display.get_wm_info()['window']
     SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
     
-    # Donut state
-    center_x = screen_width // 2
-    center_y = screen_height // 2
-    outer_radius = 150
-    inner_radius = 75
+    # List to store all donuts
+    donuts = []
     
-    # Interaction state
-    dragging_center = False
-    dragging_outer = False
-    dragging_inner = False
-    drag_start_pos = (0, 0)
-    drag_start_radius_outer = outer_radius
-    drag_start_radius_inner = inner_radius
+    # Get the directory where the script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    params_file = os.path.join(script_dir, 'donut_params.json')
     
-    # Minimum distance between inner and outer radius
+    # Try to load existing donuts
+    try:
+        with open(params_file, 'r') as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                # Multiple donuts format
+                for donut_data in data:
+                    donuts.append(Donut.from_dict(donut_data))
+            elif isinstance(data, dict):
+                # Single donut format (legacy)
+                donuts.append(Donut(
+                    data.get("center_x", screen_width // 2),
+                    data.get("center_y", screen_height // 2),
+                    data.get("outer_radius", 150),
+                    data.get("inner_radius", 75)
+                ))
+    except (FileNotFoundError, json.JSONDecodeError):
+        # Create a default donut if no file exists or it's invalid
+        donuts.append(Donut(screen_width // 2, screen_height // 2))
+    
+    # Currently selected donut (None if no donut is selected)
+    selected_donut_index = None if not donuts else 0
+    
+    # Constants for donut manipulation
     min_radius_gap = 10
-    # Minimum inner radius
     min_inner_radius = 10
-    # Maximum outer radius
     max_outer_radius = 500
     
     # Scaling factor for mouse wheel
@@ -88,6 +231,7 @@ def main():
     RED = (255, 0, 0)
     GREEN = (0, 255, 0)
     BLUE = (0, 0, 255)
+    YELLOW = (255, 255, 0)  # For highlighting selected donut
     
     # Movement speed for keyboard controls (pixels per frame)
     MOVE_SPEED = 1  # More precise movement
@@ -110,36 +254,21 @@ def main():
     font = pygame.font.SysFont('Arial', 24)
     small_font = pygame.font.SysFont('Arial', 16)  # Smaller font for instructions
     
-    # Function to scale the donut while maintaining thickness
-    def scale_donut(scale_up, factor=SCALE_FACTOR):
-        nonlocal outer_radius, inner_radius
-        
-        # Calculate current thickness (absolute value)
-        thickness = outer_radius - inner_radius
-        
-        if scale_up:
-            # Increase outer radius
-            new_outer = min(outer_radius * (1 + factor), max_outer_radius)
-            # Maintain absolute thickness
-            new_inner = new_outer - thickness
-        else:
-            # Decrease outer radius
-            new_outer = max(outer_radius * (1 - factor), thickness + min_inner_radius)
-            # Maintain absolute thickness
-            new_inner = new_outer - thickness
-        
-        # Ensure inner radius doesn't go below minimum
-        new_inner = max(new_inner, min_inner_radius)
-        
-        # Update radii
-        outer_radius = new_outer
-        inner_radius = new_inner
+    # Function to find donut under mouse pointer
+    def find_donut_under_pointer(x, y):
+        for i, donut in enumerate(donuts):
+            if donut.is_point_over_donut(x, y):
+                return i
+        return None
     
     # Main game loop
     running = True
     clock = pygame.time.Clock()
     
     while running:
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        hover_donut_index = find_donut_under_pointer(mouse_x, mouse_y)
+        
         # Handle events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -147,6 +276,22 @@ def main():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
+                # Toggle visibility of donut under pointer with 'h' key
+                elif event.key == pygame.K_h:
+                    if hover_donut_index is not None:
+                        donuts[hover_donut_index].visible = not donuts[hover_donut_index].visible
+                # Add new donut at pointer position with 'j' key
+                elif event.key == pygame.K_j:
+                    donuts.append(Donut(mouse_x, mouse_y))
+                    selected_donut_index = len(donuts) - 1
+                # Delete donut under pointer with 'k' key
+                elif event.key == pygame.K_k:
+                    if hover_donut_index is not None:
+                        del donuts[hover_donut_index]
+                        if selected_donut_index == hover_donut_index:
+                            selected_donut_index = None
+                        elif selected_donut_index is not None and selected_donut_index > hover_donut_index:
+                            selected_donut_index -= 1
                 # Track key state for continuous movement
                 elif event.key in keys_pressed:
                     keys_pressed[event.key] = True
@@ -160,94 +305,110 @@ def main():
                 if event.button == 1:  # Left mouse button
                     mouse_x, mouse_y = event.pos
                     
-                    # Calculate distance from center
-                    dx = mouse_x - center_x
-                    dy = mouse_y - center_y
-                    distance = math.sqrt(dx*dx + dy*dy)
-                    
-                    # Check if clicking on inner circle border (with 10px tolerance)
-                    if abs(distance - inner_radius) < 10:
-                        dragging_inner = True
-                        drag_start_pos = (mouse_x, mouse_y)
-                        drag_start_radius_inner = inner_radius
-                    
-                    # Check if clicking on outer circle border (with 10px tolerance)
-                    elif abs(distance - outer_radius) < 10:
-                        dragging_outer = True
-                        drag_start_pos = (mouse_x, mouse_y)
-                        drag_start_radius_outer = outer_radius
-                    
-                    # Check if clicking inside the donut (for dragging the whole shape)
-                    elif inner_radius < distance < outer_radius or distance < inner_radius:
-                        dragging_center = True
-                        drag_start_pos = (mouse_x, mouse_y)
+                    # Find donut under pointer
+                    donut_index = find_donut_under_pointer(mouse_x, mouse_y)
+                    if donut_index is not None:
+                        selected_donut_index = donut_index
+                        donut = donuts[selected_donut_index]
+                        
+                        # Different behavior based on visibility
+                        if donut.visible:
+                            # Calculate distance from center
+                            dx = mouse_x - donut.center_x
+                            dy = mouse_y - donut.center_y
+                            distance = math.sqrt(dx*dx + dy*dy)
+                            
+                            # Check if clicking on inner circle border
+                            if donut.is_point_on_inner_border(mouse_x, mouse_y):
+                                donut.dragging_inner = True
+                                donut.drag_start_pos = (mouse_x, mouse_y)
+                                donut.drag_start_radius_inner = donut.inner_radius
+                            
+                            # Check if clicking on outer circle border
+                            elif donut.is_point_on_outer_border(mouse_x, mouse_y):
+                                donut.dragging_outer = True
+                                donut.drag_start_pos = (mouse_x, mouse_y)
+                                donut.drag_start_radius_outer = donut.outer_radius
+                            
+                            # Check if clicking inside the donut or inside inner circle
+                            elif donut.is_point_inside(mouse_x, mouse_y) or donut.is_point_inside_inner_circle(mouse_x, mouse_y):
+                                donut.dragging_center = True
+                                donut.drag_start_pos = (mouse_x, mouse_y)
+                        else:
+                            # For hidden donuts, only allow dragging (no resizing)
+                            donut.dragging_center = True
+                            donut.drag_start_pos = (mouse_x, mouse_y)
                 
-                # Mouse wheel for scaling while maintaining thickness
-                elif event.button == 4:  # Scroll up
-                    scale_donut(True, SCALE_FACTOR)
-                
-                elif event.button == 5:  # Scroll down
-                    scale_donut(False, SCALE_FACTOR)
+                # Mouse wheel for scaling selected donut (only if visible)
+                elif (event.button == 4 or event.button == 5) and selected_donut_index is not None:
+                    donut = donuts[selected_donut_index]
+                    if hover_donut_index == selected_donut_index and donut.visible:  # Only scale if mouse is over the selected donut and it's visible
+                        if event.button == 4:  # Scroll up
+                            donut.scale(True, SCALE_FACTOR, min_inner_radius, min_radius_gap, max_outer_radius)
+                        elif event.button == 5:  # Scroll down
+                            donut.scale(False, SCALE_FACTOR, min_inner_radius, min_radius_gap, max_outer_radius)
             
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1:  # Left mouse button
-                    dragging_center = False
-                    dragging_outer = False
-                    dragging_inner = False
+                    # Reset dragging state for all donuts
+                    for donut in donuts:
+                        donut.dragging_center = False
+                        donut.dragging_outer = False
+                        donut.dragging_inner = False
             
             elif event.type == pygame.MOUSEMOTION:
-                if dragging_center:
-                    # Move the entire donut
-                    mouse_x, mouse_y = event.pos
-                    dx = mouse_x - drag_start_pos[0]
-                    dy = mouse_y - drag_start_pos[1]
-                    center_x += dx
-                    center_y += dy
-                    drag_start_pos = (mouse_x, mouse_y)
-                
-                elif dragging_outer:
-                    # Resize the outer circle
-                    mouse_x, mouse_y = event.pos
-                    dx = mouse_x - center_x
-                    dy = mouse_y - center_y
-                    new_distance = math.sqrt(dx*dx + dy*dy)
+                # Handle dragging for selected donut
+                if selected_donut_index is not None:
+                    donut = donuts[selected_donut_index]
                     
-                    # Ensure outer radius is at least min_radius_gap larger than inner radius
-                    # and not larger than max_outer_radius
-                    outer_radius = max(min(new_distance, max_outer_radius), inner_radius + min_radius_gap)
-                
-                elif dragging_inner:
-                    # Resize the inner circle
-                    mouse_x, mouse_y = event.pos
-                    dx = mouse_x - center_x
-                    dy = mouse_y - center_y
-                    new_distance = math.sqrt(dx*dx + dy*dy)
+                    if donut.dragging_center:
+                        # Move the entire donut
+                        mouse_x, mouse_y = event.pos
+                        dx = mouse_x - donut.drag_start_pos[0]
+                        dy = mouse_y - donut.drag_start_pos[1]
+                        donut.move(dx, dy)
+                        donut.drag_start_pos = (mouse_x, mouse_y)
                     
-                    # Ensure inner radius is at least min_inner_radius
-                    # and at most (outer_radius - min_radius_gap)
-                    inner_radius = max(min(new_distance, outer_radius - min_radius_gap), min_inner_radius)
+                    # Only allow resizing if the donut is visible
+                    elif donut.visible and donut.dragging_outer:
+                        # Resize the outer circle
+                        mouse_x, mouse_y = event.pos
+                        dx = mouse_x - donut.center_x
+                        dy = mouse_y - donut.center_y
+                        new_distance = math.sqrt(dx*dx + dy*dy)
+                        donut.resize_outer(new_distance, min_radius_gap, max_outer_radius)
+                    
+                    elif donut.visible and donut.dragging_inner:
+                        # Resize the inner circle
+                        mouse_x, mouse_y = event.pos
+                        dx = mouse_x - donut.center_x
+                        dy = mouse_y - donut.center_y
+                        new_distance = math.sqrt(dx*dx + dy*dy)
+                        donut.resize_inner(new_distance, min_inner_radius, min_radius_gap)
         
-        # Handle continuous keyboard movement
-        speed = MOVE_SPEED_FAST if keys_pressed[pygame.K_LSHIFT] or keys_pressed[pygame.K_RSHIFT] else MOVE_SPEED
-        
-        if keys_pressed[pygame.K_LEFT]:
-            center_x -= speed
-        if keys_pressed[pygame.K_RIGHT]:
-            center_x += speed
-        if keys_pressed[pygame.K_UP]:
-            center_y -= speed
-        if keys_pressed[pygame.K_DOWN]:
-            center_y += speed
+        # Handle continuous keyboard movement for selected donut
+        if selected_donut_index is not None and hover_donut_index == selected_donut_index:
+            donut = donuts[selected_donut_index]
+            speed = MOVE_SPEED_FAST if keys_pressed[pygame.K_LSHIFT] or keys_pressed[pygame.K_RSHIFT] else MOVE_SPEED
             
-        # Handle continuous scaling with - and = keys (with reduced speed)
-        if keys_pressed[pygame.K_EQUALS] or keys_pressed[pygame.K_MINUS]:
-            scale_delay += 1
-            if scale_delay >= SCALE_DELAY_MAX:
-                scale_delay = 0
-                if keys_pressed[pygame.K_EQUALS]:  # = key for growing
-                    scale_donut(True, KEYBOARD_SCALE_FACTOR)
-                if keys_pressed[pygame.K_MINUS]:  # - key for shrinking
-                    scale_donut(False, KEYBOARD_SCALE_FACTOR)
+            if keys_pressed[pygame.K_LEFT]:
+                donut.move(-speed, 0)
+            if keys_pressed[pygame.K_RIGHT]:
+                donut.move(speed, 0)
+            if keys_pressed[pygame.K_UP]:
+                donut.move(0, -speed)
+            if keys_pressed[pygame.K_DOWN]:
+                donut.move(0, speed)
+                
+            # Handle continuous scaling with - and = keys (only if donut is visible)
+            if donut.visible and (keys_pressed[pygame.K_EQUALS] or keys_pressed[pygame.K_MINUS]):
+                scale_delay += 1
+                if scale_delay >= SCALE_DELAY_MAX:
+                    scale_delay = 0
+                    if keys_pressed[pygame.K_EQUALS]:  # = key for growing
+                        donut.scale(True, KEYBOARD_SCALE_FACTOR, min_inner_radius, min_radius_gap, max_outer_radius)
+                    if keys_pressed[pygame.K_MINUS]:  # - key for shrinking
+                        donut.scale(False, KEYBOARD_SCALE_FACTOR, min_inner_radius, min_radius_gap, max_outer_radius)
         
         # Clear the screen
         screen.fill(BLACK)
@@ -262,19 +423,17 @@ def main():
                                (int(start_point[0]), int(start_point[1])),
                                (int(end_point[0]), int(end_point[1])), 1)
         
-        # Draw the donut (filled white ring)
-        pygame.draw.circle(screen, WHITE, (center_x, center_y), outer_radius)  # Outer circle (filled)
-        pygame.draw.circle(screen, BLACK, (center_x, center_y), inner_radius)  # Inner circle (cuts out center)
+        # Draw all donuts
+        for i, donut in enumerate(donuts):
+            donut.draw(screen, WHITE, BLACK, YELLOW, i == selected_donut_index)
         
-        # Draw the borders of the circles for better visibility during editing
-        pygame.draw.circle(screen, WHITE, (center_x, center_y), outer_radius, 2)  # Outer border
-        pygame.draw.circle(screen, WHITE, (center_x, center_y), inner_radius, 2)  # Inner border
-        
-        # Draw radius values
-        outer_text = font.render(f"Outer: {int(outer_radius)}", True, WHITE)
-        inner_text = font.render(f"Inner: {int(inner_radius)}", True, WHITE)
-        screen.blit(outer_text, (20, 20))
-        screen.blit(inner_text, (20, 50))
+        # Draw radius values for selected donut
+        if selected_donut_index is not None:
+            donut = donuts[selected_donut_index]
+            outer_text = font.render(f"Outer: {int(donut.outer_radius)}", True, WHITE)
+            inner_text = font.render(f"Inner: {int(donut.inner_radius)}", True, WHITE)
+            screen.blit(outer_text, (20, 20))
+            screen.blit(inner_text, (20, 50))
         
         # Draw instructions
         instructions = [
@@ -284,7 +443,10 @@ def main():
             "-/= keys: Scale donut precisely",
             "Drag center/inside: Move donut",
             "Drag inner circle: Resize inner radius",
-            "Drag outer circle: Resize outer radius"
+            "Drag outer circle: Resize outer radius",
+            "H: Toggle donut visibility",
+            "J: Add new donut at pointer position",
+            "K: Delete donut under pointer"
         ]
         
         for i, instruction in enumerate(instructions):
@@ -296,19 +458,17 @@ def main():
         clock.tick(60)
     
     # Save donut parameters before quitting
-    donut_params = {
-        "center_x": center_x,
-        "center_y": center_y,
-        "outer_radius": outer_radius,
-        "inner_radius": inner_radius
-    }
-    
-    try:
-        with open('donut_params.json', 'w') as f:
-            json.dump(donut_params, f)
-        print("Donut parameters saved successfully")
-    except Exception as e:
-        print(f"Error saving donut parameters: {e}")
+    if donuts:
+        try:
+            # Get the directory where the script is located
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            params_file = os.path.join(script_dir, 'donut_params.json')
+            
+            with open(params_file, 'w') as f:
+                json.dump([donut.to_dict() for donut in donuts], f)
+            print(f"Donut parameters saved successfully to {params_file}")
+        except Exception as e:
+            print(f"Error saving donut parameters: {e}")
     
     # Quit Pygame
     pygame.quit()
