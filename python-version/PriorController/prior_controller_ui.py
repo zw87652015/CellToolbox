@@ -27,8 +27,8 @@ class PriorControllerUI:
         """
         self.root = root
         self.root.title("Prior Stage Controller")
-        self.root.geometry("600x500")
-        self.root.minsize(600, 500)
+        self.root.geometry("800x600")
+        self.root.minsize(800, 600)
         
         # Set style
         self.style = ttk.Style()
@@ -49,6 +49,10 @@ class PriorControllerUI:
         self.accel = StringVar(value="50")
         self.status = StringVar(value="Not connected")
         self.position_display = StringVar(value="X: 0.0, Y: 0.0")
+        self.position_name = StringVar(value="")
+        
+        # Position memory
+        self.saved_positions = {}  # Dictionary to store named positions
         
         # Create the UI elements
         self.create_ui()
@@ -59,6 +63,9 @@ class PriorControllerUI:
         
         # Bind window close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        
+        # Load saved positions from file
+        self.load_positions_from_file()
     
     def create_ui(self):
         """Create the UI elements."""
@@ -182,8 +189,37 @@ class PriorControllerUI:
         
         ttk.Button(info_frame, text="Get Controller Info", command=self.get_controller_info).pack(padx=5, pady=5)
         
-        # Initialize UI state
-        self.update_ui_state()
+        # Position memory frame
+        pos_memory_frame = ttk.LabelFrame(main_frame, text="Position Memory")
+        pos_memory_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Position name entry
+        ttk.Label(pos_memory_frame, text="Position Name:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Entry(pos_memory_frame, textvariable=self.position_name, width=15).grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        
+        # Save and recall buttons
+        ttk.Button(pos_memory_frame, text="Save Current Position", command=self.save_position).grid(row=0, column=2, padx=5, pady=5)
+        ttk.Button(pos_memory_frame, text="Go To Selected Position", command=self.go_to_position).grid(row=0, column=3, padx=5, pady=5)
+        ttk.Button(pos_memory_frame, text="Delete Selected", command=self.delete_position).grid(row=0, column=4, padx=5, pady=5)
+        
+        # Saved positions listbox
+        ttk.Label(pos_memory_frame, text="Saved Positions:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        
+        # Frame for listbox and scrollbar
+        list_frame = ttk.Frame(pos_memory_frame)
+        list_frame.grid(row=1, column=1, columnspan=4, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Listbox for saved positions
+        self.positions_listbox = tk.Listbox(list_frame, height=5, width=50, yscrollcommand=scrollbar.set)
+        self.positions_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.positions_listbox.yview)
+        
+        # Bind selection event
+        self.positions_listbox.bind('<<ListboxSelect>>', self.on_position_select)
     
     def update_ui_state(self):
         """Update UI elements based on connection state."""
@@ -837,22 +873,154 @@ class PriorControllerUI:
         update_log("1. Auto Initialize - Automatically find limits and center")
         update_log("2. Manual Init - Manually move to limits and center")
     
+    def save_position(self):
+        """Save the current position with a name."""
+        if not self.connected or not self.controller:
+            self.status.set("Connect to controller first")
+            return
+        
+        # Get current position
+        position = self.controller.get_position()
+        if position is None:
+            self.status.set("Failed to get position")
+            return
+        
+        # Get position name
+        name = self.position_name.get().strip()
+        if not name:
+            self.status.set("Enter a position name")
+            return
+        
+        # Save position
+        self.saved_positions[name] = position
+        self.status.set(f"Position '{name}' saved")
+        
+        # Update listbox
+        self.update_positions_listbox()
+        
+        # Clear position name
+        self.position_name.set("")
+    
+    def go_to_position(self):
+        """Go to a saved position."""
+        if not self.connected or not self.controller:
+            self.status.set("Connect to controller first")
+            return
+        
+        # Get selected position
+        selection = self.positions_listbox.curselection()
+        if not selection:
+            self.status.set("Select a position first")
+            return
+        
+        # Get position name and coordinates
+        name = self.positions_listbox.get(selection[0])
+        name = name.split(" - ")[0]  # Extract just the name part
+        
+        if name not in self.saved_positions:
+            self.status.set(f"Position '{name}' not found")
+            return
+        
+        # Move to position
+        position = self.saved_positions[name]
+        success = self.controller.move_to(position[0], position[1])
+        
+        if success:
+            self.status.set(f"Moving to position '{name}'")
+        else:
+            self.status.set(f"Failed to move to position '{name}'")
+    
+    def delete_position(self):
+        """Delete a saved position."""
+        # Get selected position
+        selection = self.positions_listbox.curselection()
+        if not selection:
+            self.status.set("Select a position first")
+            return
+        
+        # Get position name
+        name = self.positions_listbox.get(selection[0])
+        name = name.split(" - ")[0]  # Extract just the name part
+        
+        # Delete position
+        if name in self.saved_positions:
+            del self.saved_positions[name]
+            self.status.set(f"Position '{name}' deleted")
+            
+            # Update listbox
+            self.update_positions_listbox()
+        else:
+            self.status.set(f"Position '{name}' not found")
+    
+    def update_positions_listbox(self):
+        """Update the positions listbox with current saved positions."""
+        # Clear listbox
+        self.positions_listbox.delete(0, tk.END)
+        
+        # Add saved positions
+        for name, position in self.saved_positions.items():
+            self.positions_listbox.insert(tk.END, f"{name} - X: {position[0]:.1f}, Y: {position[1]:.1f}")
+    
+    def on_position_select(self, event):
+        """Handle position selection in listbox."""
+        # Get selected position
+        selection = self.positions_listbox.curselection()
+        if not selection:
+            return
+        
+        # Get position name
+        name = self.positions_listbox.get(selection[0])
+        name = name.split(" - ")[0]  # Extract just the name part
+        
+        # Set position name
+        self.position_name.set(name)
+    
     def on_close(self):
         """Handle window close event."""
         # Stop position updates
         self.position_update_running = False
-        if self.update_thread:
+        if self.update_thread and self.update_thread.is_alive():
             self.update_thread.join(timeout=1.0)
         
-        # Disconnect and clean up
-        if self.controller:
-            try:
-                self.controller.disconnect()
-                self.controller.close()
-            except:
-                pass
+        # Disconnect from controller
+        if self.connected and self.controller:
+            self.controller.disconnect()
         
+        # Save position memory to file
+        self.save_positions_to_file()
+        
+        # Close window
         self.root.destroy()
+    
+    def save_positions_to_file(self):
+        """Save saved positions to a file."""
+        try:
+            with open("saved_positions.txt", "w") as f:
+                for name, position in self.saved_positions.items():
+                    f.write(f"{name},{position[0]},{position[1]}\n")
+        except Exception as e:
+            print(f"Error saving positions: {str(e)}")
+    
+    def load_positions_from_file(self):
+        """Load saved positions from a file."""
+        try:
+            if os.path.exists("saved_positions.txt"):
+                with open("saved_positions.txt", "r") as f:
+                    for line in f:
+                        parts = line.strip().split(",")
+                        if len(parts) >= 3:
+                            name = parts[0]
+                            try:
+                                x = float(parts[1])
+                                y = float(parts[2])
+                                self.saved_positions[name] = (x, y)
+                            except ValueError:
+                                pass
+                
+                # Update listbox
+                self.update_positions_listbox()
+        except Exception as e:
+            print(f"Error loading positions: {str(e)}")
 
 
 def main():
