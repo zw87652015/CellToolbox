@@ -107,7 +107,7 @@ class Donut:
         """Draw the donut on the screen"""
         if self.visible:
             # Draw the donut (filled white ring)
-            pygame.draw.circle(screen, YELLOW if selected else WHITE, (int(self.center_x), int(self.center_y)), int(self.outer_radius))  # Outer circle (filled)
+            pygame.draw.circle(screen, WHITE if selected else WHITE, (int(self.center_x), int(self.center_y)), int(self.outer_radius))  # Outer circle (filled)
             pygame.draw.circle(screen, BLACK, (int(self.center_x), int(self.center_y)), int(self.inner_radius))  # Inner circle (cuts out center)
             
             # Draw the borders of the circles for better visibility during editing
