@@ -272,6 +272,49 @@ class PriorStageController:
         ret, _ = self.cmd(f"controller.stage.speed.set {speed_percent}")
         return ret == 0
     
+    def set_max_speed(self, x_max, y_max):
+        """
+        Set maximum speed values for X and Y axes in microns/second.
+        This is crucial for controlling the actual movement speed.
+        
+        Args:
+            x_max (int): Maximum X speed in microns/second
+            y_max (int): Maximum Y speed in microns/second
+            
+        Returns:
+            bool: True if command was sent successfully
+        """
+        ret, _ = self.cmd(f"controller.stage.maxspeed.set {x_max} {y_max}")
+        return ret == 0
+    
+    def get_max_speed(self):
+        """
+        Get current maximum speed settings.
+        
+        Returns:
+            tuple: (x_max, y_max) speeds in microns/second or None if error
+        """
+        ret, response = self.cmd("controller.stage.maxspeed.get")
+        
+        if ret == 0:
+            try:
+                parts = response.split()
+                if len(parts) == 2:
+                    x_max = int(float(parts[0].replace(',', '.')))
+                    y_max = int(float(parts[1].replace(',', '.')))
+                    return x_max, y_max
+                else:
+                    # Try comma-separated format
+                    parts = response.split(',')
+                    if len(parts) == 2:
+                        x_max = int(float(parts[0].replace(',', '.')))
+                        y_max = int(float(parts[1].replace(',', '.')))
+                        return x_max, y_max
+            except Exception as e:
+                print(f"Error parsing max speed: {str(e)}")
+        
+        return None
+    
     def set_acceleration(self, accel_percent):
         """
         Set acceleration as percentage of maximum.

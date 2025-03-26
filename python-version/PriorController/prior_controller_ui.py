@@ -27,8 +27,8 @@ class PriorControllerUI:
         """
         self.root = root
         self.root.title("Prior Stage Controller")
-        self.root.geometry("800x600")
-        self.root.minsize(800, 600)
+        self.root.geometry("750x940")  # Increased height from 600 to 800
+        self.root.minsize(750, 940)    # Increased minimum height from 600 to 800
         
         # Set style
         self.style = ttk.Style()
@@ -50,6 +50,10 @@ class PriorControllerUI:
         self.status = StringVar(value="Not connected")
         self.position_display = StringVar(value="X: 0.0, Y: 0.0")
         self.position_name = StringVar(value="")
+        
+        # Speed settings
+        self.max_speed_x = StringVar(value="10000")
+        self.max_speed_y = StringVar(value="10000")
         
         # Position memory
         self.saved_positions = {}  # Dictionary to store named positions
@@ -91,11 +95,54 @@ class PriorControllerUI:
         status_frame = ttk.Frame(main_frame)
         status_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        ttk.Label(status_frame, text="Status:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Label(status_frame, textvariable=self.status).grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        ttk.Label(status_frame, text="Status:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(status_frame, textvariable=self.status).pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(status_frame, text="Position:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-        ttk.Label(status_frame, textvariable=self.position_display).grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        # Position display
+        pos_frame = ttk.LabelFrame(main_frame, text="Position")
+        pos_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Label(pos_frame, text="Current Position:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        ttk.Label(pos_frame, textvariable=self.position_display).grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        ttk.Button(pos_frame, text="Get Position", command=self.get_pos).grid(row=0, column=2, padx=5, pady=5)
+        
+        # Speed control frame
+        speed_frame = ttk.LabelFrame(main_frame, text="Speed Settings")
+        speed_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Speed percentage
+        ttk.Label(speed_frame, text="Speed (%):").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        speed_scale = ttk.Scale(speed_frame, from_=1, to=100, orient=tk.HORIZONTAL, 
+                               variable=self.speed, command=self.on_speed_change)
+        speed_scale.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        ttk.Label(speed_frame, textvariable=self.speed).grid(row=0, column=2, padx=5, pady=5, sticky=tk.W)
+        
+        # Max speed settings
+        ttk.Label(speed_frame, text="Max Speed (µm/s):").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        
+        # X max speed
+        ttk.Label(speed_frame, text="X:").grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        ttk.Entry(speed_frame, textvariable=self.max_speed_x, width=8).grid(row=1, column=2, padx=5, pady=5, sticky=tk.W)
+        
+        # Y max speed
+        ttk.Label(speed_frame, text="Y:").grid(row=1, column=3, padx=5, pady=5, sticky=tk.W)
+        ttk.Entry(speed_frame, textvariable=self.max_speed_y, width=8).grid(row=1, column=4, padx=5, pady=5, sticky=tk.W)
+        
+        # Apply button
+        ttk.Button(speed_frame, text="Apply Max Speed", command=self.apply_max_speed).grid(row=1, column=5, padx=5, pady=5)
+        
+        # Get current max speed button
+        ttk.Button(speed_frame, text="Get Current Max Speed", command=self.get_max_speed).grid(row=1, column=6, padx=5, pady=5)
+        
+        # Preset buttons
+        preset_frame = ttk.Frame(speed_frame)
+        preset_frame.grid(row=2, column=0, columnspan=7, padx=5, pady=5, sticky=tk.W)
+        
+        ttk.Label(preset_frame, text="Presets:").pack(side=tk.LEFT, padx=5)
+        ttk.Button(preset_frame, text="Slow (1000)", command=lambda: self.set_max_speed_preset(1000)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(preset_frame, text="Medium (5000)", command=lambda: self.set_max_speed_preset(5000)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(preset_frame, text="Fast (10000)", command=lambda: self.set_max_speed_preset(10000)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(preset_frame, text="Very Fast (50000)", command=lambda: self.set_max_speed_preset(50000)).pack(side=tk.LEFT, padx=5)
         
         # Create notebook for tabs
         notebook = ttk.Notebook(main_frame)
@@ -1021,7 +1068,124 @@ class PriorControllerUI:
                 self.update_positions_listbox()
         except Exception as e:
             print(f"Error loading positions: {str(e)}")
-
+    
+    def on_speed_change(self, value):
+        """Handle speed slider change."""
+        if self.connected and self.controller:
+            # Update the speed value
+            speed_val = int(float(value))
+            self.speed.set(str(speed_val))
+            
+            # Set the speed on the controller
+            self.controller.set_speed(speed_val)
+    
+    def apply_max_speed(self):
+        """Apply the maximum speed settings."""
+        if not self.connected or not self.controller:
+            self.status.set("Connect to controller first")
+            return
+        
+        try:
+            # Get max speed values from UI
+            x_max = int(self.max_speed_x.get())
+            y_max = int(self.max_speed_y.get())
+            
+            # Apply max speed settings
+            success = self.controller.set_max_speed(x_max, y_max)
+            
+            if success:
+                self.status.set(f"Max speed set to X: {x_max}, Y: {y_max} µm/s")
+            else:
+                self.status.set("Failed to set max speed")
+        except ValueError:
+            self.status.set("Invalid max speed values")
+    
+    def get_max_speed(self):
+        """Get the current maximum speed settings from the controller."""
+        if not self.connected or not self.controller:
+            self.status.set("Connect to controller first")
+            return
+        
+        # Get max speed from controller
+        max_speed = self.controller.get_max_speed()
+        
+        if max_speed:
+            x_max, y_max = max_speed
+            self.max_speed_x.set(str(x_max))
+            self.max_speed_y.set(str(y_max))
+            self.status.set(f"Current max speed: X: {x_max}, Y: {y_max} µm/s")
+        else:
+            self.status.set("Failed to get max speed")
+    
+    def set_max_speed_preset(self, speed_value):
+        """Set a preset max speed value."""
+        self.max_speed_x.set(str(speed_value))
+        self.max_speed_y.set(str(speed_value))
+        
+        # Apply the speed if connected
+        if self.connected and self.controller:
+            success = self.controller.set_max_speed(speed_value, speed_value)
+            
+            if success:
+                self.status.set(f"Max speed set to {speed_value} µm/s")
+            else:
+                self.status.set("Failed to set max speed")
+    
+    def toggle_connection(self):
+        """Connect or disconnect from the controller."""
+        if not self.connected:
+            # Connect
+            try:
+                com_port = int(self.com_port.get())
+                
+                # Create controller if it doesn't exist
+                if not self.controller:
+                    self.controller = PriorStageController()
+                
+                # Connect to controller
+                if self.controller.connect(com_port):
+                    self.connected = True
+                    self.connect_btn.config(text="Disconnect")
+                    self.status.set("Connected to controller")
+                    
+                    # Set default speed and get max speed
+                    self.controller.set_speed(int(self.speed.get()))
+                    max_speed = self.controller.get_max_speed()
+                    if max_speed:
+                        x_max, y_max = max_speed
+                        self.max_speed_x.set(str(x_max))
+                        self.max_speed_y.set(str(y_max))
+                    else:
+                        # Set a default max speed if we couldn't get it
+                        self.controller.set_max_speed(10000, 10000)
+                        self.max_speed_x.set("10000")
+                        self.max_speed_y.set("10000")
+                    
+                    # Start position update thread
+                    self.position_update_running = True
+                    self.update_thread = threading.Thread(target=self.update_position_thread, daemon=True)
+                    self.update_thread.start()
+                else:
+                    self.status.set("Failed to connect to controller")
+            except ValueError:
+                self.status.set("Invalid COM port")
+            except Exception as e:
+                self.status.set(f"Error: {str(e)}")
+        else:
+            # Disconnect
+            if self.controller:
+                self.controller.disconnect()
+            
+            self.connected = False
+            self.connect_btn.config(text="Connect")
+            self.status.set("Disconnected from controller")
+            
+            # Stop position updates
+            self.position_update_running = False
+            if self.update_thread:
+                self.update_thread.join(timeout=1.0)
+        
+        self.update_ui_state()
 
 def main():
     """Main function to start the application."""
