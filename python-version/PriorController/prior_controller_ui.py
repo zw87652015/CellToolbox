@@ -194,7 +194,10 @@ class PriorControllerUI:
         
         # Middle row
         ttk.Button(move_frame, text="←", command=lambda: self.move_rel(-1, 0)).grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
-        ttk.Button(move_frame, text="■", command=self.stop_movement).grid(row=1, column=1, padx=5, pady=5, sticky="nsew")
+        stop_frame = ttk.Frame(move_frame)
+        stop_frame.grid(row=1, column=1, padx=5, pady=5, sticky="nsew")
+        ttk.Button(stop_frame, text="Smooth Stop", command=self.stop_movement).pack(side=tk.LEFT, padx=5)
+        ttk.Button(stop_frame, text="Abrupt Stop", command=self.stop_movement_abruptly).pack(side=tk.LEFT, padx=5)
         ttk.Button(move_frame, text="→", command=lambda: self.move_rel(1, 0)).grid(row=1, column=2, padx=5, pady=5, sticky="nsew")
         
         # Bottom row
@@ -463,10 +466,20 @@ class PriorControllerUI:
             self.status.set(f"Error: {str(e)}")
     
     def stop_movement(self):
-        """Stop all movement."""
+        """Stop all movement using the smooth stop method."""
         try:
-            if self.controller and self.controller.stop():
-                self.status.set("Movement stopped")
+            if self.controller and self.controller.stop_smoothly():
+                self.status.set("Movement stopped smoothly")
+            else:
+                self.status.set("Failed to stop movement")
+        except Exception as e:
+            self.status.set(f"Error: {str(e)}")
+    
+    def stop_movement_abruptly(self):
+        """Stop all movement immediately using the abrupt stop method."""
+        try:
+            if self.controller and self.controller.stop_abruptly():
+                self.status.set("Movement stopped abruptly")
             else:
                 self.status.set("Failed to stop movement")
         except Exception as e:

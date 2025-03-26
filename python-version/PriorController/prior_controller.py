@@ -224,12 +224,38 @@ class PriorStageController:
     
     def stop(self):
         """
-        Stop all movement.
+        Stop all movement using the smooth stop method.
+        This maintains positional accuracy.
         
         Returns:
             bool: True if stop command was sent successfully
         """
-        return self.set_velocity(0, 0)
+        ret, _ = self.cmd("controller.stop.smoothly")
+        return ret == 0
+    
+    def stop_smoothly(self):
+        """
+        Stop all axes moving in a controlled fashion.
+        This follows the acceleration and jerk settings for each axis.
+        Positional accuracy is maintained.
+        
+        Returns:
+            bool: True if stop command was sent successfully
+        """
+        ret, _ = self.cmd("controller.stop.smoothly")
+        return ret == 0
+    
+    def stop_abruptly(self):
+        """
+        Stop all axes moving immediately.
+        This ignores any acceleration and jerk settings for each axis.
+        Positional accuracy may be lost and re-initialization of individual axes is recommended.
+        
+        Returns:
+            bool: True if stop command was sent successfully
+        """
+        ret, _ = self.cmd("controller.stop.abruptly")
+        return ret == 0
     
     def is_busy(self):
         """
