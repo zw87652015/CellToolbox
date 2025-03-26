@@ -14,11 +14,11 @@ class ProjectorCameraCalibration:
         
         print(f"Screen resolution: {self.projector_width}x{self.projector_height}")
         
-        self.camera_width = 640
-        self.camera_height = 480
+        self.camera_width = 1280
+        self.camera_height = 720
         
         # Initialize camera
-        self.cap = cv2.VideoCapture(2)
+        self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
         
