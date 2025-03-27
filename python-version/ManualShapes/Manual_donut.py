@@ -5,14 +5,25 @@ import sys
 import ctypes
 import math
 import os
+import threading
+import time
 
 # Win32 constants
 HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
+SW_SHOW = 5
+SWP_SHOWWINDOW = 0x0040
 
 # Win32 API functions
 SetWindowPos = ctypes.windll.user32.SetWindowPos
+ShowWindow = ctypes.windll.user32.ShowWindow
+BringWindowToTop = ctypes.windll.user32.BringWindowToTop
+AttachThreadInput = ctypes.windll.user32.AttachThreadInput
+GetForegroundWindow = ctypes.windll.user32.GetForegroundWindow
+GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
+GetCurrentThreadId = ctypes.windll.kernel32.GetCurrentThreadId
 
 class Donut:
     def __init__(self, x, y, outer_radius=150, inner_radius=75, visible=True):
@@ -175,12 +186,64 @@ def main():
     screen_info = pygame.display.Info()
     screen_width = screen_info.current_w
     screen_height = screen_info.current_h
-    screen = pygame.display.set_mode((2560, 1600), pygame.FULLSCREEN | pygame.NOFRAME)
+    
+    # Set environment variable for window position
+    os.environ['SDL_VIDEO_WINDOW_POS'] = "0,0"
+    
+    # Create the pygame display - using standard window mode
+    # This is important for window management
+    screen = pygame.display.set_mode((2560, 1600))
     pygame.display.set_caption("Manual Donut Tool")
     
-    # Get window handle and set it to stay on top
+    # Fill screen with black to make it visible
+    screen.fill((0, 0, 0))
+    pygame.display.flip()
+    
+    # Get window handle
     hwnd = pygame.display.get_wm_info()['window']
+    print(f"Window handle: {hwnd}")
+    
+    # Use multiple Win32 API calls to ensure visibility
+    ShowWindow(hwnd, SW_SHOW)
     SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+    BringWindowToTop(hwnd)
+    
+    # Flag for controlling the window focus thread
+    running = True
+    
+    # Start window focus maintenance thread
+    def maintain_window_focus():
+        """Maintain window focus for the pygame window"""
+        print("Starting window focus maintenance thread")
+        
+        try:
+            # Get window handle
+            hwnd = pygame.display.get_wm_info()['window']
+            print(f"Focus thread got window handle: {hwnd}")
+            
+            # Periodically refresh window focus
+            while running:
+                try:
+                    # Force window to stay on top
+                    ShowWindow(hwnd, SW_SHOW)
+                    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+                    BringWindowToTop(hwnd)
+                    
+                    # Sleep to avoid excessive CPU usage
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"Error in focus refresh: {str(e)}")
+                    time.sleep(1.0)
+                
+        except Exception as e:
+            print(f"Error in window focus maintenance: {str(e)}")
+        
+        print("Window focus maintenance thread exiting")
+    
+    # Start the focus thread
+    focus_thread = threading.Thread(target=maintain_window_focus)
+    focus_thread.daemon = True
+    focus_thread.start()
     
     # List to store all donuts
     donuts = []
@@ -469,6 +532,9 @@ def main():
             print(f"Donut parameters saved successfully to {params_file}")
         except Exception as e:
             print(f"Error saving donut parameters: {e}")
+    
+    # Signal the focus thread to exit
+    running = False
     
     # Quit Pygame
     pygame.quit()

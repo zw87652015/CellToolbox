@@ -6,8 +6,8 @@ def read_usb_capture():
     # 选择摄像头的编号
     cap = cv2.VideoCapture(0)
     # 设置摄像头分辨率
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     
     # 获取实际的分辨率
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
@@ -28,6 +28,9 @@ def read_usb_capture():
         # 读取摄像头的画面
         ret, frame = cap.read()
         if ret:
+            # 水平翻转图像以修正镜像问题
+            frame = cv2.flip(frame, 1)  # 1表示水平翻转，0表示垂直翻转，-1表示同时水平和垂直翻转
+            
             # 显示当前帧的大小
             height, width = frame.shape[:2]
             print(f"当前帧大小: {width}x{height}", end='\r')
