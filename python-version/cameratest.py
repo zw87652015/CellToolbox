@@ -4,7 +4,7 @@ from datetime import datetime
 
 def read_usb_capture():
     # 选择摄像头的编号
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(2)
     # 设置摄像头分辨率
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)

@@ -18,7 +18,7 @@ class ProjectorCameraCalibration:
         self.camera_height = 720
         
         # Initialize camera
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(2)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
         
@@ -33,12 +33,12 @@ class ProjectorCameraCalibration:
         
         # First circle (larger)
         self.screen_circle1_x = int(1000 * scale_x)
-        self.screen_circle1_y = int(1200 * scale_y)
+        self.screen_circle1_y = int(800 * scale_y)
         self.screen_circle1_radius = int(80 * min(scale_x, scale_y))
         
         # Second circle (smaller)
         self.screen_circle2_x = int((1000 + 200) * scale_x)  # 200 pixels to the right
-        self.screen_circle2_y = int(1200 * scale_y)  # Same y coordinate
+        self.screen_circle2_y = int(800 * scale_y)  # Same y coordinate
         self.screen_circle2_radius = int(40 * min(scale_x, scale_y))
         
         # Initialize calibration parameters
@@ -60,7 +60,7 @@ class ProjectorCameraCalibration:
         scale_y = self.projector_height / 1600
         
         # Scale the circle position and size
-        original_x, original_y = 1000, 1200  # Original coordinates in 2560x1600
+        original_x, original_y = 1000, 800  # Original coordinates in 2560x1600
         original_radius = 80  # Original radius reduced to 80
         
         # Scale to actual screen resolution
