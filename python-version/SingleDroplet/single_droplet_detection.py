@@ -275,16 +275,9 @@ class SingleDropletApp:
         if not self.camera.isOpened():
             raise RuntimeError(f"Could not open camera {CAMERA_INDEX}")
         
-        # Set camera resolution to 1280x720
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        
         # Get camera resolution
         self.cam_width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.cam_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        # Verify camera resolution
-        print(f"Camera resolution set to: {self.cam_width}x{self.cam_height}")
         
         # Initialize variables
         self.running = True
@@ -336,7 +329,7 @@ class SingleDropletApp:
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         
         # Create camera canvas
-        self.camera_canvas = tk.Canvas(display_frame, width=1280, height=720, bg="black")
+        self.camera_canvas = tk.Canvas(display_frame, width=640, height=480, bg="black")
         self.camera_canvas.pack(fill=tk.BOTH, expand=True)
         
         # Bind mouse events
@@ -533,13 +526,10 @@ class SingleDropletApp:
                                 # Map camera coordinates directly to FOV space
                                 if fov_width > 0 and fov_height > 0 and cam_width > 0 and cam_height > 0:
                                     # Normalize camera coordinates (0-1)
-                                    # Invert y-axis if needed to match the orientation
                                     x_norm = x / cam_width
                                     y_norm = y / cam_height
                                     
-                                    # Map to FOV space while preserving relative position
-                                    # This ensures the cell's position relative to the camera view
-                                    # matches the donut's position relative to the FOV border
+                                    # Map to FOV space
                                     x_final = int(fov_min_x + x_norm * fov_width)
                                     y_final = int(fov_min_y + y_norm * fov_height)
                                     
@@ -548,9 +538,8 @@ class SingleDropletApp:
                                     y_final = max(fov_min_y, min(y_final, fov_max_y))
                                     
                                     # Scale radius relative to FOV
-                                    # Use a consistent scaling factor based on the FOV dimensions
-                                    fov_scale_factor = min(fov_width / cam_width, fov_height / cam_height)
-                                    scaled_radius = radius * fov_scale_factor
+                                    radius_scale = min(fov_width, fov_height) / 20  # Adjust this factor as needed
+                                    scaled_radius = radius * (radius_scale / 100)
                                 else:
                                     # Fallback to original transformation
                                     # Apply calibration transformations
@@ -731,9 +720,6 @@ class SingleDropletApp:
                     self.status_var.set("Error: Could not read from camera")
                     time.sleep(0.1)
                     continue
-                
-                # Flip the frame horizontally to match the drawn patterns
-                frame = cv2.flip(frame, 1)
                 
                 # Convert to RGB for tkinter
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

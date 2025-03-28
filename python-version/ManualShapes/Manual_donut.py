@@ -190,7 +190,7 @@ def main():
     # Set environment variable for window position
     os.environ['SDL_VIDEO_WINDOW_POS'] = "0,0"
     
-    # Create the pygame display - using standard window mode
+    # Create the pygame display - using normal window mode instead of fullscreen
     # This is important for window management
     screen = pygame.display.set_mode((2560, 1600))
     pygame.display.set_caption("Manual Donut Tool")
@@ -210,30 +210,35 @@ def main():
     
     # Flag for controlling the window focus thread
     running = True
+    pygame_initialized = True
     
     # Start window focus maintenance thread
     def maintain_window_focus():
         """Maintain window focus for the pygame window"""
         print("Starting window focus maintenance thread")
         
+        # Wait for pygame to initialize
+        while not pygame_initialized and running:
+            time.sleep(0.1)
+        
+        # Get window handle
         try:
-            # Get window handle
             hwnd = pygame.display.get_wm_info()['window']
             print(f"Focus thread got window handle: {hwnd}")
             
-            # Periodically refresh window focus
+            # Initial window setup - make it visible once
+            ShowWindow(hwnd, SW_SHOW)
+            
+            # Important: Set window to NOTOPMOST instead of TOPMOST
+            # This allows it to stay visible without forcing it to the foreground
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+            print("Window visibility set up - not forcing foreground")
+            
+            # Periodically check and restore window if needed
             while running:
-                try:
-                    # Force window to stay on top
-                    ShowWindow(hwnd, SW_SHOW)
-                    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
-                    BringWindowToTop(hwnd)
-                    
-                    # Sleep to avoid excessive CPU usage
-                    time.sleep(0.5)
-                except Exception as e:
-                    print(f"Error in focus refresh: {str(e)}")
-                    time.sleep(1.0)
+                # Ensure window is visible but not forcefully in foreground
+                ShowWindow(hwnd, SW_SHOW)
+                time.sleep(0.5)
                 
         except Exception as e:
             print(f"Error in window focus maintenance: {str(e)}")

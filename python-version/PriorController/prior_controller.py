@@ -94,52 +94,11 @@ class PriorStageController:
             bool: True if connection successful
         """
         print(f"Attempting to connect to COM{com_port} using DLL: {self.dll_path}")
-        
-        # Add a longer delay before sending any commands
-        print("Waiting for controller to stabilize...")
-        time.sleep(2)
-        
-        # Try with an even more gentle connection approach
-        try:
-            # Skip the version check as it's causing error -10001
-            # Instead, try to connect directly but with careful error handling
-            print(f"Sending connect command to COM{com_port}...")
-            ret, response = self.cmd(f"controller.connect {com_port}")
-            print(f"Connection response: ret={ret}, response='{response}'")
-            
-            if ret == 0:
-                self.connected = True
-                print("Connection successful!")
-                
-                # Wait a bit before sending any more commands
-                time.sleep(1)
-                
-                # Set a reasonable default max speed after connecting
-                try:
-                    print("Setting default max speed...")
-                    speed_ret, _ = self.cmd("controller.stage.maxspeed.set 10000 10000")
-                    if speed_ret == 0:
-                        print("Default max speed set successfully")
-                    else:
-                        print(f"Warning: Could not set default max speed (ret={speed_ret})")
-                except Exception as speed_e:
-                    print(f"Warning: Error setting default max speed: {str(speed_e)}")
-                
-                return True
-            elif ret == -10001:
-                print("Error -10001: Controller not responding. This may indicate:")
-                print("1. The controller is not powered on")
-                print("2. The controller is connected to a different COM port")
-                print("3. The USB connection is unstable")
-                print("4. The controller is restarting when connection is attempted")
-                return False
-            else:
-                print(f"Connection failed with error code: {ret}")
-                return False
-        except Exception as e:
-            print(f"Connection error: {str(e)}")
-            return False
-        
+        ret, response = self.cmd(f"controller.connect {com_port}")
+        print(f"Connection response: ret={ret}, response='{response}'")
+        if ret == 0:
+            self.connected = True
+            return True
         return False
     
     def disconnect(self):
@@ -203,7 +162,6 @@ class PriorStageController:
             except Exception as e:
                 print(f"Error parsing position: {str(e)}")
                 return None
-        
         return None
     
     def set_position(self, x, y):
