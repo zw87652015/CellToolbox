@@ -175,7 +175,7 @@ class ToupCamLiveControl:
             text="DC (No Flicker)", 
             variable=self.light_source_var, 
             value=0,
-            command=self.update_light_source
+            command=self.set_light_source
         ).pack(anchor=tk.W, padx=5, pady=2)
         
         ttk.Radiobutton(
@@ -183,7 +183,7 @@ class ToupCamLiveControl:
             text="50 Hz (Europe/Asia)", 
             variable=self.light_source_var, 
             value=1,
-            command=self.update_light_source
+            command=self.set_light_source
         ).pack(anchor=tk.W, padx=5, pady=2)
         
         ttk.Radiobutton(
@@ -191,7 +191,7 @@ class ToupCamLiveControl:
             text="60 Hz (North America)", 
             variable=self.light_source_var, 
             value=2,
-            command=self.update_light_source
+            command=self.set_light_source
         ).pack(anchor=tk.W, padx=5, pady=2)
         
         # Snapshot button
@@ -495,21 +495,61 @@ class ToupCamLiveControl:
             self.gain_scale.set(slider_value)
             self.gain_value_label.configure(text=str(self.gain))
     
-    def update_light_source(self):
-        """Update the light source frequency setting"""
+    def set_light_source(self, event=None):
+        """Set the light source frequency (anti-flicker)"""
         if not self.hcam:
             return
         
         self.light_source = self.light_source_var.get()
         
         try:
-            # Set the light source option
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_LIGHTSOURCE, self.light_source)
+            # The correct method is put_HZ, not put_Option with TOUPCAM_OPTION_LIGHTSOURCE
+            # 0 = DC, 1 = 50Hz, 2 = 60Hz
+            self.hcam.put_HZ(self.light_source)
+            
+            # Set optimal exposure time based on light source frequency
+            if self.light_source == 1:  # 50Hz
+                # Set exposure time to 20ms (1000/50) for 50Hz
+                optimal_exposure = 20000  # 20ms in microseconds
+                try:
+                    # Disable auto exposure if it's enabled
+                    if self.auto_exposure:
+                        self.auto_exposure = False
+                        self.hcam.put_AutoExpoEnable(False)
+                        self.auto_exposure_var.set(0)
+                    
+                    # Set the optimal exposure time
+                    self.hcam.put_ExpoTime(optimal_exposure)
+                    self.exposure_time = optimal_exposure
+                    self.update_exposure_slider()
+                    print(f"Set optimal exposure time for 50Hz: {optimal_exposure/1000:.2f}ms")
+                except toupcam.HRESULTException as ex:
+                    print(f"Error setting optimal exposure time: 0x{ex.hr & 0xffffffff:x}")
+            elif self.light_source == 2:  # 60Hz
+                # Set exposure time to 16.67ms (1000/60) for 60Hz
+                optimal_exposure = 16667  # 16.667ms in microseconds
+                try:
+                    # Disable auto exposure if it's enabled
+                    if self.auto_exposure:
+                        self.auto_exposure = False
+                        self.hcam.put_AutoExpoEnable(False)
+                        self.auto_exposure_var.set(0)
+                    
+                    # Set the optimal exposure time
+                    self.hcam.put_ExpoTime(optimal_exposure)
+                    self.exposure_time = optimal_exposure
+                    self.update_exposure_slider()
+                    print(f"Set optimal exposure time for 60Hz: {optimal_exposure/1000:.2f}ms")
+                except toupcam.HRESULTException as ex:
+                    print(f"Error setting optimal exposure time: 0x{ex.hr & 0xffffffff:x}")
             
             light_source_names = ["DC (No Flicker)", "50 Hz", "60 Hz"]
             self.status_var.set(f"Light source set to {light_source_names[self.light_source]}")
+            print(f"Light source set to {light_source_names[self.light_source]} (value: {self.light_source})")
         except toupcam.HRESULTException as ex:
-            print(f"Error setting light source: 0x{ex.hr & 0xffffffff:x}")
+            error_code = ex.hr & 0xffffffff
+            print(f"Error setting light source with put_HZ: 0x{error_code:x}")
+            self.status_var.set(f"Failed to set light source frequency")
     
     def take_snapshot(self):
         """Take a snapshot and save it to disk"""
@@ -549,15 +589,71 @@ class ToupCamLiveControl:
     
     def on_closing(self):
         """Clean up resources when closing the application"""
+        print("Closing application and cleaning up resources...")
+        
+        # Set running flag to False first to stop any ongoing operations
         self.running = False
         
-        if self.hcam:
-            self.hcam.Close()
-            self.hcam = None
+        # Give a short time for threads to stop
+        time.sleep(0.1)
         
-        self.root.destroy()
-        sys.exit(0)
-
+        # Handle camera with extreme caution - both Stop and Close can hang
+        if self.hcam:
+            camera_ref = self.hcam
+            self.hcam = None  # Immediately set to None so we don't try to access it again
+            
+            try:
+                # Create a thread to handle camera cleanup with timeout
+                def cleanup_camera():
+                    try:
+                        print("Attempting to stop camera...")
+                        try:
+                            camera_ref.Stop()
+                            print("Camera stopped successfully")
+                        except Exception as e:
+                            print(f"Error stopping camera: {e}")
+                        
+                        print("Attempting to close camera...")
+                        try:
+                            camera_ref.Close()
+                            print("Camera closed successfully")
+                        except Exception as e:
+                            print(f"Error closing camera: {e}")
+                    except Exception as e:
+                        print(f"Fatal error in camera cleanup: {e}")
+                
+                # Start camera cleanup in a separate thread
+                cleanup_thread = threading.Thread(target=cleanup_camera)
+                cleanup_thread.daemon = True  # Make thread a daemon so it won't block program exit
+                cleanup_thread.start()
+                
+                # Only wait a very short time - don't let it block the application exit
+                print("Waiting briefly for camera cleanup...")
+                cleanup_thread.join(timeout=0.5)  # Wait max 0.5 second for entire cleanup
+                
+                if cleanup_thread.is_alive():
+                    print("WARNING: Camera cleanup timed out, abandoning camera resources")
+            except Exception as e:
+                print(f"Error setting up camera cleanup: {e}")
+        
+        print("Shutting down application...")
+        # Use after_idle to ensure this runs in the main thread after current processing
+        self.root.after_idle(self._force_quit)
+    
+    def _force_quit(self):
+        """Force quit the application"""
+        try:
+            self.root.quit()
+            print("Application quit successfully")
+        except Exception as e:
+            print(f"Error during quit: {e}")
+            # As a last resort
+            try:
+                self.root.destroy()
+                print("Application destroyed")
+            except Exception as e:
+                print(f"Error during destroy: {e}")
+        
 def main():
     root = tk.Tk()
     app = ToupCamLiveControl(root)
