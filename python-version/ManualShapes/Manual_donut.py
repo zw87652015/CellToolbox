@@ -7,6 +7,10 @@ import math
 import os
 import threading
 import time
+import tkinter as tk
+from tkinter import ttk
+import multiprocessing
+from multiprocessing import Process, Value, Array
 
 # Win32 constants
 HWND_TOPMOST = -1
@@ -153,6 +157,151 @@ class Donut:
             data.get("visible", True)  # Default to visible if not specified
         )
 
+class Rest:
+    """Represents a filled disk (no hole) that temporarily replaces a donut"""
+    def __init__(self, x, y, radius, visible=True):
+        self.center_x = x
+        self.center_y = y
+        self.radius = radius
+        self.visible = visible
+    
+    def draw(self, screen, WHITE, BLACK, YELLOW, selected):
+        """Draw the rest disk on the screen"""
+        if self.visible:
+            # Draw a filled circle
+            pygame.draw.circle(screen, WHITE if selected else WHITE, (int(self.center_x), int(self.center_y)), int(self.radius))
+            # Draw the border for better visibility
+            pygame.draw.circle(screen, YELLOW if selected else WHITE, (int(self.center_x), int(self.center_y)), int(self.radius), 2)
+    
+    def to_dict(self):
+        """Convert rest to dictionary for saving"""
+        return {
+            "center_x": self.center_x,
+            "center_y": self.center_y,
+            "radius": self.radius,
+            "visible": self.visible
+        }
+
+class Expect:
+    """Represents a small disk that appears at the center of a Rest disk"""
+    def __init__(self, x, y, radius, visible=True):
+        self.center_x = x
+        self.center_y = y
+        self.radius = radius
+        self.visible = visible
+    
+    def draw(self, screen, GREEN, BLACK, YELLOW, selected):
+        """Draw the expect disk on the screen"""
+        if self.visible:
+            # Draw a filled circle with green color
+            pygame.draw.circle(screen, GREEN if selected else GREEN, (int(self.center_x), int(self.center_y)), int(self.radius))
+            # Draw the border for better visibility
+            pygame.draw.circle(screen, YELLOW if selected else GREEN, (int(self.center_x), int(self.center_y)), int(self.radius), 2)
+    
+    def to_dict(self):
+        """Convert expect to dictionary for saving"""
+        return {
+            "center_x": self.center_x,
+            "center_y": self.center_y,
+            "radius": self.radius,
+            "visible": self.visible
+        }
+
+class ParameterControlPanel:
+    """Control panel for adjusting parameters of the Expect disks"""
+    def __init__(self):
+        # Use shared memory for communication between processes
+        self._expect_radius = Value('i', 30)  # Default radius for Expect disks
+        self._panel_active = Value('i', 0)    # 0 = inactive, 1 = active
+        self.process = None
+    
+    @property
+    def expect_radius(self):
+        return self._expect_radius.value
+    
+    @property
+    def panel_active(self):
+        return self._panel_active.value == 1
+    
+    def create_panel(self):
+        """Create the parameter control panel in a separate process"""
+        if self.process is not None and self.process.is_alive():
+            return
+        
+        # Set panel as active
+        self._panel_active.value = 1
+        
+        # Start a new process for the Tkinter UI
+        self.process = Process(target=self._run_panel, args=(self._expect_radius, self._panel_active))
+        self.process.daemon = True
+        self.process.start()
+    
+    def _run_panel(self, expect_radius, panel_active):
+        """Run the parameter control panel in a separate process"""
+        root = tk.Tk()
+        root.title("Parameter Control Panel")
+        root.geometry("400x300")
+        
+        # Handle window close event
+        def on_close():
+            panel_active.value = 0
+            root.destroy()
+        
+        root.protocol("WM_DELETE_WINDOW", on_close)
+        
+        # Create a frame for the Expect radius control
+        radius_frame = ttk.LabelFrame(root, text="Expect Disk Radius")
+        radius_frame.pack(fill="x", padx=10, pady=10)
+        
+        # Create a scale for adjusting the radius
+        radius_var = tk.IntVar(value=expect_radius.value)
+        
+        def update_radius(value):
+            # Update the shared memory value
+            try:
+                val = int(float(value))
+                expect_radius.value = val
+                radius_value_label.config(text=f"Radius: {val}")
+            except ValueError:
+                pass
+        
+        radius_scale = ttk.Scale(
+            radius_frame, 
+            from_=5, 
+            to=100,
+            orient="horizontal",
+            length=300,
+            value=expect_radius.value,
+            command=update_radius
+        )
+        radius_scale.pack(padx=10, pady=5)
+        
+        # Create a label to display the current radius value
+        radius_value_label = ttk.Label(radius_frame, text=f"Radius: {expect_radius.value}")
+        radius_value_label.pack(padx=10, pady=5)
+        
+        # Create a frame for future parameters (placeholder)
+        future_frame = ttk.LabelFrame(root, text="Future Parameters")
+        future_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Add a placeholder label
+        placeholder_label = ttk.Label(future_frame, text="Space for future parameters")
+        placeholder_label.pack(padx=10, pady=40)
+        
+        # Start the Tkinter event loop
+        root.mainloop()
+        
+        # Ensure panel is marked as inactive when the window is closed
+        panel_active.value = 0
+    
+    def on_close(self):
+        """Handle closing the panel from the main process"""
+        if self.process and self.process.is_alive():
+            self._panel_active.value = 0
+            self.process.terminate()
+            self.process.join()
+            self.process = None
+
 def load_calibration_data():
     """Load the latest calibration data"""
     try:
@@ -181,6 +330,9 @@ def main():
     if calibration_data is None:
         print("Failed to load calibration data")
         sys.exit(1)
+    
+    # Create parameter control panel
+    param_panel = ParameterControlPanel()
     
     # Set up display
     screen_info = pygame.display.Info()
@@ -360,6 +512,94 @@ def main():
                             selected_donut_index = None
                         elif selected_donut_index is not None and selected_donut_index > hover_donut_index:
                             selected_donut_index -= 1
+                # Fill donuts as disks when G key is pressed
+                elif event.key == pygame.K_g:
+                    # Create the parameter control panel if it doesn't exist
+                    if not param_panel.panel_active:
+                        param_panel.create_panel()
+                    
+                    # Create a list to store the temporary Rest objects
+                    rest_disks = []
+                    rest_radii = []
+                    rest_centers = []
+                    
+                    # Convert each donut to a Rest disk
+                    for i, donut in enumerate(donuts):
+                        if donut.visible:
+                            # Create a Rest disk with the same outer radius as the donut
+                            rest = Rest(donut.center_x, donut.center_y, donut.outer_radius)
+                            rest_disks.append(rest)
+                            rest_radii.append(donut.outer_radius)
+                            rest_centers.append((donut.center_x, donut.center_y))
+                    
+                    # If there are any disks to display
+                    if rest_disks:
+                        # Clear the screen
+                        screen.fill(BLACK)
+                        
+                        # Draw FOV borders using calibration data if available
+                        if calibration_data and 'fov_corners' in calibration_data:
+                            fov_corners = calibration_data['fov_corners']
+                            for i in range(len(fov_corners)):
+                                start_point = fov_corners[i]
+                                end_point = fov_corners[(i + 1) % len(fov_corners)]
+                                pygame.draw.line(screen, WHITE, 
+                                               (int(start_point[0]), int(start_point[1])),
+                                               (int(end_point[0]), int(end_point[1])), 1)
+                        
+                        # Draw all Rest disks
+                        for i, rest in enumerate(rest_disks):
+                            # Display the Rest_n label
+                            text = font.render(f"Rest_{i+1} (r={int(rest_radii[i])})", True, WHITE)
+                            text_rect = text.get_rect(center=(rest.center_x, rest.center_y))
+                            
+                            # Draw the Rest disk
+                            rest.draw(screen, WHITE, BLACK, YELLOW, False)
+                            
+                            # Draw the label
+                            screen.blit(text, text_rect)
+                        
+                        # Update the display
+                        pygame.display.flip()
+                        
+                        # Wait for 1 second
+                        time.sleep(1)
+                        
+                        # Hide Rest_n disks and show Expect_n disks
+                        screen.fill(BLACK)
+                        
+                        # Draw FOV borders again
+                        if calibration_data and 'fov_corners' in calibration_data:
+                            fov_corners = calibration_data['fov_corners']
+                            for i in range(len(fov_corners)):
+                                start_point = fov_corners[i]
+                                end_point = fov_corners[(i + 1) % len(fov_corners)]
+                                pygame.draw.line(screen, WHITE, 
+                                               (int(start_point[0]), int(start_point[1])),
+                                               (int(end_point[0]), int(end_point[1])), 1)
+                        
+                        # Create and draw Expect_n disks
+                        expect_disks = []
+                        for i, center in enumerate(rest_centers):
+                            # Create an Expect disk with the radius from the parameter panel
+                            expect = Expect(center[0], center[1], param_panel.expect_radius)
+                            expect_disks.append(expect)
+                            
+                            # Display the Expect_n label
+                            text = font.render(f"Expect_{i+1} (r={param_panel.expect_radius})", True, GREEN)
+                            text_rect = text.get_rect(center=(center[0], center[1] - param_panel.expect_radius - 20))
+                            
+                            # Draw the Expect disk
+                            expect.draw(screen, GREEN, BLACK, YELLOW, False)
+                            
+                            # Draw the label
+                            screen.blit(text, text_rect)
+                        
+                        # Update the display
+                        pygame.display.flip()
+                        
+                        # Wait for 1 second
+                        time.sleep(1)
                 # Track key state for continuous movement
                 elif event.key in keys_pressed:
                     keys_pressed[event.key] = True
@@ -514,7 +754,8 @@ def main():
             "Drag outer circle: Resize outer radius",
             "H: Toggle donut visibility",
             "J: Add new donut at pointer position",
-            "K: Delete donut under pointer"
+            "K: Delete donut under pointer",
+            "G: Start Rest/Expect disk sequence with parameter control"
         ]
         
         for i, instruction in enumerate(instructions):
@@ -540,6 +781,9 @@ def main():
     
     # Signal the focus thread to exit
     running = False
+    
+    # Close the parameter control panel if it's open
+    param_panel.on_close()
     
     # Quit Pygame
     pygame.quit()
