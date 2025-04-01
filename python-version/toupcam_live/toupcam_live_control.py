@@ -14,6 +14,7 @@ import cv2
 import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
+from tkinter import messagebox
 
 # Add the toupcam SDK path to the Python path
 sdk_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'toupcamsdk.20241216', 'python')
@@ -60,6 +61,10 @@ class ToupCamLiveControl:
         self.exposure_time = 10000  # Default exposure time in microseconds
         self.gain = 100  # Default gain
         self.light_source = 0  # 0: DC, 1: 50Hz, 2: 60Hz
+        self.binning_mode = 0x01  # Default: No binning
+        
+        # Load binning settings if available
+        self.binning_mode = self.load_binning_settings()
         
         # Exposure range
         self.exposure_min = 10
@@ -81,10 +86,76 @@ class ToupCamLiveControl:
         # Start camera
         self.start_camera()
     
+    def load_binning_settings(self):
+        """Load binning settings from file"""
+        try:
+            settings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "binning_settings.txt")
+            if os.path.exists(settings_path):
+                with open(settings_path, "r") as f:
+                    binning_mode = int(f.read().strip())
+                print(f"Loaded digital binning mode: {hex(binning_mode)}")
+                return binning_mode
+        except Exception as e:
+            print(f"Error loading binning settings: {str(e)}")
+        return 0x0001  # Default: No binning
+    
     def create_ui(self):
-        # Main frame layout
+        """Create the user interface"""
+        # Main frame
         main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Top control frame
+        control_frame = ttk.Frame(main_frame)
+        control_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+        
+        # Exposure controls
+        exposure_frame = ttk.LabelFrame(control_frame, text="Exposure")
+        exposure_frame.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        # Exposure time slider
+        ttk.Label(exposure_frame, text="Time (ms):").grid(row=0, column=0, padx=5, pady=2, sticky=tk.W)
+        self.exposure_scale = ttk.Scale(
+            exposure_frame, 
+            from_=1, 
+            to=100, 
+            orient=tk.HORIZONTAL, 
+            length=150,
+            command=self.on_exposure_change
+        )
+        self.exposure_scale.set(16.67)  # Default: 16.67ms
+        self.exposure_scale.grid(row=0, column=1, padx=5, pady=2)
+        self.exposure_value = ttk.Label(exposure_frame, text="16.67")
+        self.exposure_value.grid(row=0, column=2, padx=5, pady=2, sticky=tk.W)
+        
+        # Gain slider
+        ttk.Label(exposure_frame, text="Gain:").grid(row=1, column=0, padx=5, pady=2, sticky=tk.W)
+        self.gain_scale = ttk.Scale(
+            exposure_frame, 
+            from_=0, 
+            to=100, 
+            orient=tk.HORIZONTAL, 
+            length=150,
+            command=self.on_gain_change
+        )
+        self.gain_scale.set(0)  # Default: 0
+        self.gain_scale.grid(row=1, column=1, padx=5, pady=2)
+        self.gain_value = ttk.Label(exposure_frame, text="0")
+        self.gain_value.grid(row=1, column=2, padx=5, pady=2, sticky=tk.W)
+        
+        # Auto exposure checkbox
+        self.auto_exposure_var = tk.BooleanVar(value=False)
+        auto_exposure_cb = ttk.Checkbutton(
+            exposure_frame, 
+            text="Auto Exposure", 
+            variable=self.auto_exposure_var,
+            command=self.on_auto_exposure_change
+        )
+        auto_exposure_cb.grid(row=2, column=0, columnspan=3, padx=5, pady=2, sticky=tk.W)
+        
+        # Binning label
+        self.binning_label = ttk.Label(control_frame, text="Digital Binning: Not Set")
+        self.binning_label.pack(side=tk.LEFT, padx=10, pady=5)
         
         # Left panel for video display
         self.video_frame = ttk.Frame(main_frame, borderwidth=2, relief="groove")
@@ -97,113 +168,6 @@ class ToupCamLiveControl:
         # FPS counter
         self.fps_label = ttk.Label(self.video_frame, text="FPS: 0")
         self.fps_label.pack(anchor=tk.NW, padx=5, pady=5)
-        
-        # Right panel for controls
-        control_frame = ttk.Frame(main_frame, width=300)
-        control_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
-        
-        # Camera info section
-        info_frame = ttk.LabelFrame(control_frame, text="Camera Information")
-        info_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        self.camera_info_label = ttk.Label(info_frame, text="No camera connected")
-        self.camera_info_label.pack(padx=5, pady=5)
-        
-        self.resolution_label = ttk.Label(info_frame, text="Resolution: -")
-        self.resolution_label.pack(padx=5, pady=5)
-        
-        # Exposure control section
-        exposure_frame = ttk.LabelFrame(control_frame, text="Exposure Control")
-        exposure_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        # Auto exposure checkbox
-        self.auto_exposure_var = tk.BooleanVar(value=True)
-        self.auto_exposure_check = ttk.Checkbutton(
-            exposure_frame, 
-            text="Auto Exposure", 
-            variable=self.auto_exposure_var,
-            command=self.toggle_auto_exposure
-        )
-        self.auto_exposure_check.pack(anchor=tk.W, padx=5, pady=5)
-        
-        # Exposure time control
-        exposure_control_frame = ttk.Frame(exposure_frame)
-        exposure_control_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        ttk.Label(exposure_control_frame, text="Exposure Time (ms):").pack(side=tk.LEFT)
-        
-        self.exposure_value_label = ttk.Label(exposure_control_frame, text="10.0")
-        self.exposure_value_label.pack(side=tk.RIGHT)
-        
-        self.exposure_scale = ttk.Scale(
-            exposure_frame, 
-            from_=0, 
-            to=100,
-            orient=tk.HORIZONTAL,
-            command=self.update_exposure_time
-        )
-        self.exposure_scale.set(50)  # Set to middle initially
-        self.exposure_scale.pack(fill=tk.X, padx=5, pady=5)
-        
-        # Gain control
-        gain_control_frame = ttk.Frame(exposure_frame)
-        gain_control_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        ttk.Label(gain_control_frame, text="Gain:").pack(side=tk.LEFT)
-        
-        self.gain_value_label = ttk.Label(gain_control_frame, text="100")
-        self.gain_value_label.pack(side=tk.RIGHT)
-        
-        self.gain_scale = ttk.Scale(
-            exposure_frame, 
-            from_=0, 
-            to=100,
-            orient=tk.HORIZONTAL,
-            command=self.update_gain
-        )
-        self.gain_scale.set(0)  # Set to minimum initially
-        self.gain_scale.pack(fill=tk.X, padx=5, pady=5)
-        
-        # Light source frequency selection
-        light_source_frame = ttk.LabelFrame(control_frame, text="Light Source Frequency")
-        light_source_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        self.light_source_var = tk.IntVar(value=0)
-        
-        ttk.Radiobutton(
-            light_source_frame, 
-            text="DC (No Flicker)", 
-            variable=self.light_source_var, 
-            value=0,
-            command=self.set_light_source
-        ).pack(anchor=tk.W, padx=5, pady=2)
-        
-        ttk.Radiobutton(
-            light_source_frame, 
-            text="50 Hz (Europe/Asia)", 
-            variable=self.light_source_var, 
-            value=1,
-            command=self.set_light_source
-        ).pack(anchor=tk.W, padx=5, pady=2)
-        
-        ttk.Radiobutton(
-            light_source_frame, 
-            text="60 Hz (North America)", 
-            variable=self.light_source_var, 
-            value=2,
-            command=self.set_light_source
-        ).pack(anchor=tk.W, padx=5, pady=2)
-        
-        # Snapshot button
-        snapshot_frame = ttk.Frame(control_frame)
-        snapshot_frame.pack(fill=tk.X, padx=5, pady=10)
-        
-        self.snapshot_button = ttk.Button(
-            snapshot_frame, 
-            text="Take Snapshot", 
-            command=self.take_snapshot
-        )
-        self.snapshot_button.pack(fill=tk.X, padx=5, pady=5)
         
         # Status bar
         self.status_var = tk.StringVar(value="Ready")
@@ -218,87 +182,76 @@ class ToupCamLiveControl:
         """Initialize and start the camera"""
         devices = toupcam.Toupcam.EnumV2()
         if not devices:
-            self.status_var.set("No ToupCam cameras found")
+            self.status_var.set("No camera found")
+            messagebox.showerror(
+                "Camera Error", 
+                "No ToupCam cameras found. Please connect a camera and restart the application."
+            )
             return
         
         device = devices[0]  # Use the first camera
         
-        # Update camera info
-        self.camera_info_label.configure(text=f"Camera: {device.displayname}")
-        
-        # Try to open the camera
         try:
-            self.hcam = toupcam.Toupcam.Open(device.id)
+            # Open the camera
+            self.hcam = toupcam.Toupcam.Open(None)
             if not self.hcam:
                 self.status_var.set("Failed to open camera")
                 return
             
+            # Set digital binning mode regardless of whether the camera reports supporting it
+            try:
+                # Set the binning mode
+                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BINNING, self.binning_mode)
+                
+                # Update the binning mode label
+                binning_text = self.get_binning_text(self.binning_mode)
+                self.binning_label.configure(text=f"Digital Binning: {binning_text}")
+                print(f"Set digital binning mode to: {binning_text}")
+            except toupcam.HRESULTException as ex:
+                print(f"Could not set binning mode: 0x{ex.hr & 0xffffffff:x}")
+            
             # Get camera properties
             self.frame_width, self.frame_height = self.hcam.get_Size()
-            self.resolution_label.configure(text=f"Resolution: {self.frame_width} x {self.frame_height}")
+            print(f"Camera resolution: {self.frame_width}x{self.frame_height}")
             
-            # Calculate buffer size
-            bufsize = toupcam.TDIBWIDTHBYTES(self.frame_width * 24) * self.frame_height
-            self.cam_buffer = bytes(bufsize)
+            # Set camera properties
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BYTEORDER, 0)  # RGB
+            self.hcam.put_AutoExpoEnable(False)
             
-            # Create frame buffer for OpenCV
-            self.frame_buffer = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
+            # Set anti-flicker to 60Hz (for 16.67ms exposure)
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_ANTIFLICKER, 2)  # 60Hz
             
-            # Get exposure range
-            try:
-                exp_range = self.hcam.get_ExpTimeRange()
-                if isinstance(exp_range, tuple) and len(exp_range) >= 2:
-                    self.exposure_min = exp_range[0]
-                    self.exposure_max = exp_range[1]
-                    print(f"Exposure range: {self.exposure_min} - {self.exposure_max} us")
-            except toupcam.HRESULTException as ex:
-                print(f"Could not get exposure range: 0x{ex.hr & 0xffffffff:x}")
+            # Set exposure time (in microseconds)
+            self.hcam.put_ExpoTime(16670)  # 16.67ms
             
-            # Get gain range
-            try:
-                gain_range = self.hcam.get_ExpoAGainRange()
-                if isinstance(gain_range, tuple) and len(gain_range) >= 2:
-                    self.gain_min = gain_range[0]
-                    self.gain_max = gain_range[1]
-                    print(f"Gain range: {self.gain_min} - {self.gain_max}")
-            except toupcam.HRESULTException as ex:
-                print(f"Could not get gain range: 0x{ex.hr & 0xffffffff:x}")
+            # Set other camera options
+            self.hcam.put_Brightness(0)
+            self.hcam.put_Contrast(0)
+            self.hcam.put_Gamma(100)  # 1.0
             
-            # Set initial auto exposure
-            try:
-                self.hcam.put_AutoExpoEnable(self.auto_exposure)
-            except toupcam.HRESULTException as ex:
-                print(f"Could not set auto exposure: 0x{ex.hr & 0xffffffff:x}")
+            # Register callback
+            self.hcam.StartPullModeWithCallback(self.on_frame)
             
-            # Set camera options for low latency
-            try:
-                # Set low latency mode if available
-                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_NOPACKET_TIMEOUT, 0)  # Disable packet timeout
-                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_FRAME_DEQUE_LENGTH, 2)  # Minimum frame buffer
-                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_PROCESSMODE, 0)  # Raw mode for lower latency
-                self.hcam.put_RealTime(True)  # Enable real-time mode
-            except toupcam.HRESULTException as ex:
-                print(f"Could not set low latency options: 0x{ex.hr & 0xffffffff:x}")
+            self.status_var.set(f"Camera started: {device.displayname}")
             
-            # Start the camera with callback
-            self.running = True
-            self.hcam.StartPullModeWithCallback(self.camera_callback, self)
-            
-            # Start the UI update thread
-            self.update_thread = threading.Thread(target=self.update_ui)
-            self.update_thread.daemon = True
-            self.update_thread.start()
-            
-            # Schedule FPS update
-            self.root.after(1000, self.update_fps)
-            
-            self.status_var.set("Camera started successfully")
-            
-        except toupcam.HRESULTException as ex:
-            self.status_var.set(f"Error initializing camera: 0x{ex.hr & 0xffffffff:x}")
+        except Exception as e:
+            self.status_var.set(f"Error starting camera: {str(e)}")
+            messagebox.showerror("Camera Error", f"Error starting camera: {str(e)}")
     
-    @staticmethod
-    def camera_callback(nEvent, ctx):
+    def get_binning_text(self, binning_mode):
+        """Convert binning mode value to descriptive text"""
+        binning_map = {
+            0x0001: "None (1×1)",
+            0x0002: "2×2 Average",
+            0x0004: "3×3 Average",
+            0x0008: "4×4 Average",
+            0x0082: "2×2 Add",
+            0x0084: "3×3 Add",
+            0x0088: "4×4 Add"
+        }
+        return binning_map.get(binning_mode, f"Unknown ({hex(binning_mode)})")
+    
+    def on_frame(self, nEvent, ctx):
         """Static callback function for the camera events"""
         if nEvent == toupcam.TOUPCAM_EVENT_IMAGE:
             ctx.process_image()
@@ -385,13 +338,52 @@ class ToupCamLiveControl:
                 # Update the existing image
                 self.canvas.itemconfig("video", image=self.photo_image)
     
-    def update_ui(self):
-        """Background thread for periodic UI updates"""
-        while self.running:
-            # Sleep to prevent high CPU usage
-            time.sleep(0.1)
+    def on_exposure_change(self, value):
+        """Update the exposure time based on slider value"""
+        if not self.hcam or self.auto_exposure:
+            return
+        
+        # Convert slider value (0-100) to exposure time in logarithmic scale
+        normalized = float(value) / 100.0
+        log_range = np.log10(self.exposure_max) - np.log10(self.exposure_min)
+        log_value = np.log10(self.exposure_min) + normalized * log_range
+        self.exposure_time = int(10 ** log_value)
+        
+        # Ensure within range
+        self.exposure_time = max(self.exposure_min, min(self.exposure_max, self.exposure_time))
+        
+        # Update label (convert to ms for display)
+        self.exposure_value.configure(text=f"{self.exposure_time / 1000:.1f}")
+        
+        try:
+            self.hcam.put_ExpoTime(self.exposure_time)
+            self.status_var.set(f"Exposure time set to {self.exposure_time / 1000:.1f} ms")
+        except toupcam.HRESULTException as ex:
+            print(f"Error setting exposure time: 0x{ex.hr & 0xffffffff:x}")
     
-    def toggle_auto_exposure(self):
+    def on_gain_change(self, value):
+        """Update the gain based on slider value"""
+        if not self.hcam or self.auto_exposure:
+            return
+        
+        # Convert slider value (0-100) to gain
+        normalized = float(value) / 100.0
+        gain_range = self.gain_max - self.gain_min
+        self.gain = int(self.gain_min + normalized * gain_range)
+        
+        # Ensure within range
+        self.gain = max(self.gain_min, min(self.gain_max, self.gain))
+        
+        # Update label
+        self.gain_value.configure(text=str(self.gain))
+        
+        try:
+            self.hcam.put_ExpoAGain(self.gain)
+            self.status_var.set(f"Gain set to {self.gain}")
+        except toupcam.HRESULTException as ex:
+            print(f"Error setting gain: 0x{ex.hr & 0xffffffff:x}")
+    
+    def on_auto_exposure_change(self):
         """Toggle between auto and manual exposure"""
         if not self.hcam:
             return
@@ -427,51 +419,6 @@ class ToupCamLiveControl:
         except toupcam.HRESULTException as ex:
             print(f"Error setting auto exposure: 0x{ex.hr & 0xffffffff:x}")
     
-    def update_exposure_time(self, value):
-        """Update the exposure time based on slider value"""
-        if not self.hcam or self.auto_exposure:
-            return
-        
-        # Convert slider value (0-100) to exposure time in logarithmic scale
-        normalized = float(value) / 100.0
-        log_range = np.log10(self.exposure_max) - np.log10(self.exposure_min)
-        log_value = np.log10(self.exposure_min) + normalized * log_range
-        self.exposure_time = int(10 ** log_value)
-        
-        # Ensure within range
-        self.exposure_time = max(self.exposure_min, min(self.exposure_max, self.exposure_time))
-        
-        # Update label (convert to ms for display)
-        self.exposure_value_label.configure(text=f"{self.exposure_time / 1000:.1f}")
-        
-        try:
-            self.hcam.put_ExpoTime(self.exposure_time)
-            self.status_var.set(f"Exposure time set to {self.exposure_time / 1000:.1f} ms")
-        except toupcam.HRESULTException as ex:
-            print(f"Error setting exposure time: 0x{ex.hr & 0xffffffff:x}")
-    
-    def update_gain(self, value):
-        """Update the gain based on slider value"""
-        if not self.hcam or self.auto_exposure:
-            return
-        
-        # Convert slider value (0-100) to gain
-        normalized = float(value) / 100.0
-        gain_range = self.gain_max - self.gain_min
-        self.gain = int(self.gain_min + normalized * gain_range)
-        
-        # Ensure within range
-        self.gain = max(self.gain_min, min(self.gain_max, self.gain))
-        
-        # Update label
-        self.gain_value_label.configure(text=str(self.gain))
-        
-        try:
-            self.hcam.put_ExpoAGain(self.gain)
-            self.status_var.set(f"Gain set to {self.gain}")
-        except toupcam.HRESULTException as ex:
-            print(f"Error setting gain: 0x{ex.hr & 0xffffffff:x}")
-    
     def update_exposure_slider(self):
         """Update the exposure slider to match the current exposure time"""
         if self.exposure_min <= self.exposure_time <= self.exposure_max:
@@ -482,7 +429,7 @@ class ToupCamLiveControl:
             slider_value = normalized * 100.0
             
             self.exposure_scale.set(slider_value)
-            self.exposure_value_label.configure(text=f"{self.exposure_time / 1000:.1f}")
+            self.exposure_value.configure(text=f"{self.exposure_time / 1000:.1f}")
     
     def update_gain_slider(self):
         """Update the gain slider to match the current gain"""
@@ -493,99 +440,7 @@ class ToupCamLiveControl:
             slider_value = normalized * 100.0
             
             self.gain_scale.set(slider_value)
-            self.gain_value_label.configure(text=str(self.gain))
-    
-    def set_light_source(self, event=None):
-        """Set the light source frequency (anti-flicker)"""
-        if not self.hcam:
-            return
-        
-        self.light_source = self.light_source_var.get()
-        
-        try:
-            # The correct method is put_HZ, not put_Option with TOUPCAM_OPTION_LIGHTSOURCE
-            # 0 = DC, 1 = 50Hz, 2 = 60Hz
-            self.hcam.put_HZ(self.light_source)
-            
-            # Set optimal exposure time based on light source frequency
-            if self.light_source == 1:  # 50Hz
-                # Set exposure time to 20ms (1000/50) for 50Hz
-                optimal_exposure = 20000  # 20ms in microseconds
-                try:
-                    # Disable auto exposure if it's enabled
-                    if self.auto_exposure:
-                        self.auto_exposure = False
-                        self.hcam.put_AutoExpoEnable(False)
-                        self.auto_exposure_var.set(0)
-                    
-                    # Set the optimal exposure time
-                    self.hcam.put_ExpoTime(optimal_exposure)
-                    self.exposure_time = optimal_exposure
-                    self.update_exposure_slider()
-                    print(f"Set optimal exposure time for 50Hz: {optimal_exposure/1000:.2f}ms")
-                except toupcam.HRESULTException as ex:
-                    print(f"Error setting optimal exposure time: 0x{ex.hr & 0xffffffff:x}")
-            elif self.light_source == 2:  # 60Hz
-                # Set exposure time to 16.67ms (1000/60) for 60Hz
-                optimal_exposure = 16667  # 16.667ms in microseconds
-                try:
-                    # Disable auto exposure if it's enabled
-                    if self.auto_exposure:
-                        self.auto_exposure = False
-                        self.hcam.put_AutoExpoEnable(False)
-                        self.auto_exposure_var.set(0)
-                    
-                    # Set the optimal exposure time
-                    self.hcam.put_ExpoTime(optimal_exposure)
-                    self.exposure_time = optimal_exposure
-                    self.update_exposure_slider()
-                    print(f"Set optimal exposure time for 60Hz: {optimal_exposure/1000:.2f}ms")
-                except toupcam.HRESULTException as ex:
-                    print(f"Error setting optimal exposure time: 0x{ex.hr & 0xffffffff:x}")
-            
-            light_source_names = ["DC (No Flicker)", "50 Hz", "60 Hz"]
-            self.status_var.set(f"Light source set to {light_source_names[self.light_source]}")
-            print(f"Light source set to {light_source_names[self.light_source]} (value: {self.light_source})")
-        except toupcam.HRESULTException as ex:
-            error_code = ex.hr & 0xffffffff
-            print(f"Error setting light source with put_HZ: 0x{error_code:x}")
-            self.status_var.set(f"Failed to set light source frequency")
-    
-    def take_snapshot(self):
-        """Take a snapshot and save it to disk"""
-        if self.frame_buffer is None:
-            self.status_var.set("No frame available for snapshot")
-            return
-        
-        # Create snapshots directory if it doesn't exist
-        snapshots_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "snapshots")
-        os.makedirs(snapshots_dir, exist_ok=True)
-        
-        # Generate filename with timestamp
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        filename = os.path.join(snapshots_dir, f"toupcam_snapshot_{timestamp}.png")
-        
-        # Save the image
-        cv2.imwrite(filename, cv2.cvtColor(self.frame_buffer, cv2.COLOR_RGB2BGR))
-        
-        self.status_var.set(f"Snapshot saved to {filename}")
-    
-    def update_fps(self):
-        """Update the FPS counter"""
-        if self.running:
-            current_time = time.time()
-            time_diff = current_time - self.last_fps_time
-            
-            if time_diff > 0:
-                self.fps = self.frame_count / time_diff
-                self.fps_label.config(text=f"FPS: {self.fps:.1f}")
-                
-                # Reset counters
-                self.frame_count = 0
-                self.last_fps_time = current_time
-            
-            # Schedule next update
-            self.root.after(1000, self.update_fps)
+            self.gain_value.configure(text=str(self.gain))
     
     def on_closing(self):
         """Clean up resources when closing the application"""

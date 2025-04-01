@@ -472,7 +472,7 @@ def main():
     # Font for displaying radius values
     pygame.font.init()
     font = pygame.font.SysFont('Arial', 24)
-    small_font = pygame.font.SysFont('Arial', 16)  # Smaller font for instructions
+    small_font = pygame.font.SysFont('Arial', 12)  # Smaller font for instructions
     
     # Function to find donut under mouse pointer
     def find_donut_under_pointer(x, y):
@@ -760,7 +760,7 @@ def main():
         
         for i, instruction in enumerate(instructions):
             text = small_font.render(instruction, True, GREEN)
-            screen.blit(text, (20, 100 + i * 20))  # Reduced vertical spacing
+            screen.blit(text, (20, 100 + i * 15))  # Reduced vertical spacing
         
         # Update the display
         pygame.display.flip()
