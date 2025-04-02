@@ -212,12 +212,17 @@ class ParameterControlPanel:
     def __init__(self):
         # Use shared memory for communication between processes
         self._expect_radius = Value('i', 30)  # Default radius for Expect disks
+        self._expect_speed = Value('i', 50)    # Default upward movement speed for Expect disks (pixels/second)
         self._panel_active = Value('i', 0)    # 0 = inactive, 1 = active
         self.process = None
     
     @property
     def expect_radius(self):
         return self._expect_radius.value
+    
+    @property
+    def expect_speed(self):
+        return self._expect_speed.value
     
     @property
     def panel_active(self):
@@ -232,15 +237,15 @@ class ParameterControlPanel:
         self._panel_active.value = 1
         
         # Start a new process for the Tkinter UI
-        self.process = Process(target=self._run_panel, args=(self._expect_radius, self._panel_active))
+        self.process = Process(target=self._run_panel, args=(self._expect_radius, self._expect_speed, self._panel_active))
         self.process.daemon = True
         self.process.start()
     
-    def _run_panel(self, expect_radius, panel_active):
+    def _run_panel(self, expect_radius, expect_speed, panel_active):
         """Run the parameter control panel in a separate process"""
         root = tk.Tk()
         root.title("Parameter Control Panel")
-        root.geometry("400x300")
+        root.geometry("400x400")
         
         # Handle window close event
         def on_close():
@@ -279,6 +284,37 @@ class ParameterControlPanel:
         # Create a label to display the current radius value
         radius_value_label = ttk.Label(radius_frame, text=f"Radius: {expect_radius.value}")
         radius_value_label.pack(padx=10, pady=5)
+        
+        # Create a frame for the Expect speed control
+        speed_frame = ttk.LabelFrame(root, text="Expect Disk Movement Speed")
+        speed_frame.pack(fill="x", padx=10, pady=10)
+        
+        # Create a scale for adjusting the speed
+        speed_var = tk.IntVar(value=expect_speed.value)
+        
+        def update_speed(value):
+            # Update the shared memory value
+            try:
+                val = int(float(value))
+                expect_speed.value = val
+                speed_value_label.config(text=f"Speed: {val} pixels/second")
+            except ValueError:
+                pass
+        
+        speed_scale = ttk.Scale(
+            speed_frame, 
+            from_=1, 
+            to=50,
+            orient="horizontal",
+            length=300,
+            value=expect_speed.value,
+            command=update_speed
+        )
+        speed_scale.pack(padx=10, pady=5)
+        
+        # Create a label to display the current speed value
+        speed_value_label = ttk.Label(speed_frame, text=f"Speed: {expect_speed.value} pixels/second")
+        speed_value_label.pack(padx=10, pady=5)
         
         # Create a frame for future parameters (placeholder)
         future_frame = ttk.LabelFrame(root, text="Future Parameters")
@@ -518,26 +554,85 @@ def main():
                     if not param_panel.panel_active:
                         param_panel.create_panel()
                     
-                    # Create a list to store the temporary Rest objects
+                    # Hide all donuts and show Rest disks
+                    screen.fill(BLACK)
+                    
+                    # Draw FOV borders
+                    if calibration_data and 'fov_corners' in calibration_data:
+                        fov_corners = calibration_data['fov_corners']
+                        for i in range(len(fov_corners)):
+                            start_point = fov_corners[i]
+                            end_point = fov_corners[(i + 1) % len(fov_corners)]
+                            pygame.draw.line(screen, WHITE, 
+                                           (int(start_point[0]), int(start_point[1])),
+                                           (int(end_point[0]), int(end_point[1])), 1)
+                    
+                    # Get centers for all donuts
+                    rest_centers = [(donut.center_x, donut.center_y) for donut in donuts]
+                    rest_radii = [donut.outer_radius for donut in donuts]
+                    
+                    # Create and draw Rest disks
                     rest_disks = []
-                    rest_radii = []
-                    rest_centers = []
+                    for i, center in enumerate(rest_centers):
+                        rest = Rest(center[0], center[1], rest_radii[i])
+                        rest_disks.append(rest)
                     
-                    # Convert each donut to a Rest disk
-                    for i, donut in enumerate(donuts):
-                        if donut.visible:
-                            # Create a Rest disk with the same outer radius as the donut
-                            rest = Rest(donut.center_x, donut.center_y, donut.outer_radius)
-                            rest_disks.append(rest)
-                            rest_radii.append(donut.outer_radius)
-                            rest_centers.append((donut.center_x, donut.center_y))
+                    # Draw all Rest disks
+                    for i, rest in enumerate(rest_disks):
+                        # Display the Rest_n label
+                        text = font.render(f"Rest_{i+1} (r={int(rest_radii[i])})", True, WHITE)
+                        text_rect = text.get_rect(center=(rest.center_x, rest.center_y))
+                        
+                        # Draw the Rest disk
+                        rest.draw(screen, WHITE, BLACK, YELLOW, False)
+                        
+                        # Draw the label
+                        screen.blit(text, text_rect)
                     
-                    # If there are any disks to display
-                    if rest_disks:
-                        # Clear the screen
+                    # Update the display
+                    pygame.display.flip()
+                    
+                    # Wait for 1 second
+                    time.sleep(1)
+                    
+                    # Hide Rest_n disks and show Expect_n disks
+                    screen.fill(BLACK)
+                    
+                    # Draw FOV borders again
+                    if calibration_data and 'fov_corners' in calibration_data:
+                        fov_corners = calibration_data['fov_corners']
+                        for i in range(len(fov_corners)):
+                            start_point = fov_corners[i]
+                            end_point = fov_corners[(i + 1) % len(fov_corners)]
+                            pygame.draw.line(screen, WHITE, 
+                                           (int(start_point[0]), int(start_point[1])),
+                                           (int(end_point[0]), int(end_point[1])), 1)
+                    
+                    # Create and draw Expect_n disks
+                    expect_disks = []
+                    for i, center in enumerate(rest_centers):
+                        # Create an Expect disk with the radius from the parameter panel
+                        expect = Expect(center[0], center[1], param_panel.expect_radius)
+                        expect_disks.append(expect)
+                    
+                    # Animate Expect disks moving upwards
+                    animation_duration = 10  # seconds (increased to allow for slower speeds)
+                    start_time = time.time()
+                    move_speed = param_panel.expect_speed  # pixels per second
+                    
+                    # Track if each disk has reached its target position
+                    disks_reached_target = [False] * len(expect_disks)
+                    all_disks_reached_target = False
+                    
+                    while time.time() - start_time < animation_duration and not all_disks_reached_target:
+                        # Calculate time elapsed since last frame
+                        current_time = time.time()
+                        elapsed = current_time - start_time
+                        
+                        # Clear screen for the next frame
                         screen.fill(BLACK)
                         
-                        # Draw FOV borders using calibration data if available
+                        # Draw FOV borders
                         if calibration_data and 'fov_corners' in calibration_data:
                             fov_corners = calibration_data['fov_corners']
                             for i in range(len(fov_corners)):
@@ -547,50 +642,30 @@ def main():
                                                (int(start_point[0]), int(start_point[1])),
                                                (int(end_point[0]), int(end_point[1])), 1)
                         
-                        # Draw all Rest disks
-                        for i, rest in enumerate(rest_disks):
-                            # Display the Rest_n label
-                            text = font.render(f"Rest_{i+1} (r={int(rest_radii[i])})", True, WHITE)
-                            text_rect = text.get_rect(center=(rest.center_x, rest.center_y))
-                            
-                            # Draw the Rest disk
-                            rest.draw(screen, WHITE, BLACK, YELLOW, False)
-                            
-                            # Draw the label
-                            screen.blit(text, text_rect)
-                        
-                        # Update the display
-                        pygame.display.flip()
-                        
-                        # Wait for 1 second
-                        time.sleep(1)
-                        
-                        # Hide Rest_n disks and show Expect_n disks
-                        screen.fill(BLACK)
-                        
-                        # Draw FOV borders again
-                        if calibration_data and 'fov_corners' in calibration_data:
-                            fov_corners = calibration_data['fov_corners']
-                            for i in range(len(fov_corners)):
-                                start_point = fov_corners[i]
-                                end_point = fov_corners[(i + 1) % len(fov_corners)]
-                                pygame.draw.line(screen, WHITE, 
-                                               (int(start_point[0]), int(start_point[1])),
-                                               (int(end_point[0]), int(end_point[1])), 1)
-                        
-                        # Create and draw Expect_n disks
-                        expect_disks = []
-                        for i, center in enumerate(rest_centers):
-                            # Create an Expect disk with the radius from the parameter panel
-                            expect = Expect(center[0], center[1], param_panel.expect_radius)
-                            expect_disks.append(expect)
+                        # Update and draw each Expect disk
+                        all_disks_reached_target = True
+                        for i, expect in enumerate(expect_disks):
+                            if not disks_reached_target[i]:
+                                # Calculate target position (moved up by the radius of the Rest disk)
+                                target_y = rest_centers[i][1] - rest_radii[i]
+                                
+                                # Calculate new position based on elapsed time and speed
+                                new_y = rest_centers[i][1] - (move_speed * elapsed)
+                                
+                                # Check if the disk has reached or passed its target position
+                                if new_y <= target_y:
+                                    expect.center_y = target_y
+                                    disks_reached_target[i] = True
+                                else:
+                                    expect.center_y = new_y
+                                    all_disks_reached_target = False
                             
                             # Display the Expect_n label
                             text = font.render(f"Expect_{i+1} (r={param_panel.expect_radius})", True, GREEN)
-                            text_rect = text.get_rect(center=(center[0], center[1] - param_panel.expect_radius - 20))
+                            text_rect = text.get_rect(center=(expect.center_x, expect.center_y - param_panel.expect_radius - 20))
                             
                             # Draw the Expect disk
-                            expect.draw(screen, GREEN, BLACK, YELLOW, False)
+                            expect.draw(screen, WHITE, BLACK, YELLOW, False)
                             
                             # Draw the label
                             screen.blit(text, text_rect)
@@ -598,8 +673,40 @@ def main():
                         # Update the display
                         pygame.display.flip()
                         
-                        # Wait for 1 second
-                        time.sleep(1)
+                        # Process events to keep the application responsive
+                        for evt in pygame.event.get():
+                            if evt.type == pygame.QUIT:
+                                running = False
+                                break
+                            elif evt.type == pygame.KEYDOWN and evt.key == pygame.K_ESCAPE:
+                                break
+                        
+                        # Add a small delay to limit frame rate
+                        pygame.time.delay(30)
+                    
+                    # Wait for 1 second after all disks have reached their target positions
+                    time.sleep(1)
+                    
+                    # Restore to original donut state
+                    screen.fill(BLACK)
+                    
+                    # Draw FOV borders
+                    if calibration_data and 'fov_corners' in calibration_data:
+                        fov_corners = calibration_data['fov_corners']
+                        for i in range(len(fov_corners)):
+                            start_point = fov_corners[i]
+                            end_point = fov_corners[(i + 1) % len(fov_corners)]
+                            pygame.draw.line(screen, WHITE, 
+                                           (int(start_point[0]), int(start_point[1])),
+                                           (int(end_point[0]), int(end_point[1])), 1)
+                    
+                    # Draw all donuts
+                    for i, donut in enumerate(donuts):
+                        if donut.visible:
+                            donut.draw(screen, WHITE, BLACK, YELLOW, i == selected_donut_index)
+                    
+                    # Update the display
+                    pygame.display.flip()
                 # Track key state for continuous movement
                 elif event.key in keys_pressed:
                     keys_pressed[event.key] = True
