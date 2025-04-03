@@ -616,15 +616,15 @@ def main():
                         expect_disks.append(expect)
                     
                     # Animate Expect disks moving upwards
-                    animation_duration = 10  # seconds (increased to allow for slower speeds)
+                    animation_duration = 5  # seconds
                     start_time = time.time()
                     move_speed = param_panel.expect_speed  # pixels per second
                     
-                    # Track if each disk has reached its target position
-                    disks_reached_target = [False] * len(expect_disks)
-                    all_disks_reached_target = False
+                    # Track whether each disk has reached its target position
+                    disks_completed = [False] * len(expect_disks)
                     
-                    while time.time() - start_time < animation_duration and not all_disks_reached_target:
+                    # Continue animation until all disks have reached their target or time is up
+                    while time.time() - start_time < animation_duration and not all(disks_completed):
                         # Calculate time elapsed since last frame
                         current_time = time.time()
                         elapsed = current_time - start_time
@@ -643,22 +643,22 @@ def main():
                                                (int(end_point[0]), int(end_point[1])), 1)
                         
                         # Update and draw each Expect disk
-                        all_disks_reached_target = True
                         for i, expect in enumerate(expect_disks):
-                            if not disks_reached_target[i]:
-                                # Calculate target position (moved up by the radius of the Rest disk)
-                                target_y = rest_centers[i][1] - rest_radii[i]
+                            if not disks_completed[i]:
+                                # Calculate the target distance to move (equal to the Rest disk radius)
+                                target_distance = rest_radii[i]
                                 
-                                # Calculate new position based on elapsed time and speed
-                                new_y = rest_centers[i][1] - (move_speed * elapsed)
+                                # Calculate current distance moved
+                                current_distance = move_speed * elapsed
                                 
-                                # Check if the disk has reached or passed its target position
-                                if new_y <= target_y:
-                                    expect.center_y = target_y
-                                    disks_reached_target[i] = True
+                                # Check if the disk has reached its target distance
+                                if current_distance >= target_distance:
+                                    # Set to exact target position and mark as completed
+                                    expect.center_y = rest_centers[i][1] - target_distance
+                                    disks_completed[i] = True
                                 else:
-                                    expect.center_y = new_y
-                                    all_disks_reached_target = False
+                                    # Move the disk upwards based on elapsed time and speed
+                                    expect.center_y = rest_centers[i][1] - current_distance
                             
                             # Display the Expect_n label
                             text = font.render(f"Expect_{i+1} (r={param_panel.expect_radius})", True, GREEN)
@@ -684,28 +684,58 @@ def main():
                         # Add a small delay to limit frame rate
                         pygame.time.delay(30)
                     
-                    # Wait for 1 second after all disks have reached their target positions
-                    time.sleep(1)
+                    # Keep displaying the final state until R key is pressed
+                    waiting_for_r_key = True
+                    while waiting_for_r_key:
+                        # Clear screen for the next frame
+                        screen.fill(BLACK)
+                        
+                        # Draw FOV borders
+                        if calibration_data and 'fov_corners' in calibration_data:
+                            fov_corners = calibration_data['fov_corners']
+                            for i in range(len(fov_corners)):
+                                start_point = fov_corners[i]
+                                end_point = fov_corners[(i + 1) % len(fov_corners)]
+                                pygame.draw.line(screen, WHITE, 
+                                               (int(start_point[0]), int(start_point[1])),
+                                               (int(end_point[0]), int(end_point[1])), 1)
+                        
+                        # Draw each Expect disk in its final position
+                        for i, expect in enumerate(expect_disks):
+                            # Display the Expect_n label
+                            text = font.render(f"Expect_{i+1} (r={param_panel.expect_radius})", True, GREEN)
+                            text_rect = text.get_rect(center=(expect.center_x, expect.center_y - param_panel.expect_radius - 20))
+                            
+                            # Draw the Expect disk
+                            expect.draw(screen, WHITE, BLACK, YELLOW, False)
+                            
+                            # Draw the label
+                            screen.blit(text, text_rect)
+                        
+                        # Draw instruction text
+                        instruction_text = font.render("Press R to exit animation", True, WHITE)
+                        instruction_rect = instruction_text.get_rect(center=(screen_width // 2, 30))
+                        screen.blit(instruction_text, instruction_rect)
+                        
+                        # Update the display
+                        pygame.display.flip()
+                        
+                        # Process events to keep the application responsive
+                        for evt in pygame.event.get():
+                            if evt.type == pygame.QUIT:
+                                running = False
+                                waiting_for_r_key = False
+                                break
+                            elif evt.type == pygame.KEYDOWN:
+                                if evt.key == pygame.K_r:
+                                    waiting_for_r_key = False
+                                elif evt.key == pygame.K_ESCAPE:
+                                    waiting_for_r_key = False
+                        
+                        # Add a small delay to limit frame rate
+                        pygame.time.delay(30)
                     
-                    # Restore to original donut state
-                    screen.fill(BLACK)
-                    
-                    # Draw FOV borders
-                    if calibration_data and 'fov_corners' in calibration_data:
-                        fov_corners = calibration_data['fov_corners']
-                        for i in range(len(fov_corners)):
-                            start_point = fov_corners[i]
-                            end_point = fov_corners[(i + 1) % len(fov_corners)]
-                            pygame.draw.line(screen, WHITE, 
-                                           (int(start_point[0]), int(start_point[1])),
-                                           (int(end_point[0]), int(end_point[1])), 1)
-                    
-                    # Draw all donuts
-                    for i, donut in enumerate(donuts):
-                        if donut.visible:
-                            donut.draw(screen, WHITE, BLACK, YELLOW, i == selected_donut_index)
-                    
-                    # Update the display
+                    # Update the display one final time
                     pygame.display.flip()
                 # Track key state for continuous movement
                 elif event.key in keys_pressed:
