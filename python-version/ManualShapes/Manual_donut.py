@@ -219,9 +219,11 @@ class ParameterControlPanel:
     def __init__(self):
         # Use shared memory for communication between processes
         self._expect_radius = Value('i', 30)  # Default radius for Expect disks
-        self._expect_speed = Value('i', 50)    # Default upward movement speed for Expect disks (pixels/second)
+        self._expect_speed = Value('i', 80)    # Default upward movement speed for Expect disks (pixels/second)
         self._h_n = Value('i', 100)           # Default height for geometric shape (H_n)
+        self._h2_n = Value('i', 100)          # Default height for upside-down geometric shape (H2_n)
         self._panel_active = Value('i', 0)    # 0 = inactive, 1 = active
+        self._rest_radius = Value('i', 30)    # Default radius for Rest disks
         self.process = None
     
     @property
@@ -237,6 +239,14 @@ class ParameterControlPanel:
         return self._h_n.value
     
     @property
+    def h2_n(self):
+        return self._h2_n.value
+    
+    @property
+    def rest_radius(self):
+        return self._rest_radius.value
+    
+    @property
     def panel_active(self):
         return self._panel_active.value == 1
     
@@ -249,15 +259,15 @@ class ParameterControlPanel:
         self._panel_active.value = 1
         
         # Start a new process for the Tkinter UI
-        self.process = Process(target=self._run_panel, args=(self._expect_radius, self._expect_speed, self._h_n, self._panel_active))
+        self.process = Process(target=self._run_panel, args=(self._expect_radius, self._expect_speed, self._h_n, self._h2_n, self._rest_radius, self._panel_active))
         self.process.daemon = True
         self.process.start()
     
-    def _run_panel(self, expect_radius, expect_speed, h_n, panel_active):
+    def _run_panel(self, expect_radius, expect_speed, h_n, h2_n, rest_radius, panel_active):
         """Run the parameter control panel in a separate process"""
         root = tk.Tk()
         root.title("Parameter Control Panel")
-        root.geometry("400x500")
+        root.geometry("400x650")  # Increased height to fit additional controls
         
         # Handle window close event
         def on_close():
@@ -328,8 +338,8 @@ class ParameterControlPanel:
         speed_value_label = ttk.Label(speed_frame, text=f"Speed: {expect_speed.value} pixels/second")
         speed_value_label.pack(padx=10, pady=5)
         
-        # Create a frame for H_n parameter (vertical distance for geometric shape)
-        h_frame = ttk.LabelFrame(root, text="H_n (Vertical Line Length for Geometric Shape)")
+        # Create a frame for H_n parameter (vertical distance for Expect_n geometric shape)
+        h_frame = ttk.LabelFrame(root, text="H_n (Vertical Line Length for Expect_n Shape)")
         h_frame.pack(fill="x", padx=10, pady=10)
         
         def update_h(value):
@@ -364,6 +374,54 @@ class ParameterControlPanel:
         # Create a label to display the calculated R2_n value
         r2_info_label = ttk.Label(h_frame, text=f"Calculated R2_n: {calculate_r2(expect_radius.value, h_n.value):.2f} pixels")
         r2_info_label.pack(padx=10, pady=5)
+        
+        # Create a frame for H2_n parameter (vertical distance for Rest_n geometric shape)
+        h2_frame = ttk.LabelFrame(root, text="H2_n (Vertical Line Length for Rest_n Shape)")
+        h2_frame.pack(fill="x", padx=10, pady=10)
+        
+        def update_h2(value):
+            # Update the shared memory value
+            try:
+                val = int(float(value))
+                # Ensure H2_n is never less than Rest radius + 10
+                if val < rest_radius.value + 10:
+                    val = rest_radius.value + 10
+                    h2_scale.set(val)  # Force the slider to update
+                
+                h2_n.value = val
+                h2_value_label.config(text=f"H2_n: {val} pixels")
+                
+                # Calculate and show R4_n for reference
+                r3 = rest_radius.value  # Rest_n disk radius
+                r4 = calculate_r4(r3, val)
+                r4_info_label.config(text=f"Calculated R4_n: {r4:.2f} pixels")
+            except ValueError:
+                pass
+        
+        # Set minimum H2_n to be at least the rest disk radius
+        min_h2 = rest_radius.value + 10  # Ensure H2_n is larger than rest radius
+        
+        h2_scale = ttk.Scale(
+            h2_frame, 
+            from_=min_h2, 
+            to=500,  # Increased maximum to accommodate larger donuts
+            orient="horizontal",
+            length=300,
+            value=max(h2_n.value, min_h2),  # Set current value to at least min_h2
+            command=update_h2
+        )
+        h2_scale.pack(padx=10, pady=5)
+        
+        # Update h2_n to match
+        h2_n.value = max(h2_n.value, min_h2)
+        
+        # Create a label to display the current H2_n value
+        h2_value_label = ttk.Label(h2_frame, text=f"H2_n: {h2_n.value} pixels")
+        h2_value_label.pack(padx=10, pady=5)
+        
+        # Create a label to display the calculated R4_n value
+        r4_info_label = ttk.Label(h2_frame, text=f"Calculated R4_n: {calculate_r4(rest_radius.value, h2_n.value):.2f} pixels")
+        r4_info_label.pack(padx=10, pady=5)
         
         # Function to keep the window in foreground
         def keep_on_top():
@@ -403,7 +461,17 @@ class ParameterControlPanel:
             self.process.terminate()
             self.process.join()
             self.process = None
-
+    
+    def update_rest_radius(self, radius):
+        """Update the Rest disk radius"""
+        self._rest_radius.value = int(radius)  # Convert to integer since Value is of type 'i'
+        
+        # If the panel is active, we need to update the H2_n slider's minimum value
+        if self._panel_active.value == 1 and self.process and self.process.is_alive():
+            # Make sure H2_n is at least Rest radius + 10
+            if self._h2_n.value < self._rest_radius.value + 10:
+                self._h2_n.value = self._rest_radius.value + 10
+    
 # Function to calculate R2 based on mathematical relationship H^2+R2^2=(R1+R2)^2
 def calculate_r2(r1, h):
     """
@@ -418,6 +486,21 @@ def calculate_r2(r1, h):
     # H^2=R1^2+2*R1*R2
     # R2=H^2/(2*R1) - R1/2
     return h**2/(2*r1) - r1/2
+
+# Function to calculate R4 based on mathematical relationship H2^2+R4^2=(R3+R4)^2
+def calculate_r4(r3, h2):
+    """
+    Calculate R4_n based on the mathematical relationship: H2_n^2 + R4_n^2 = (R3_n + R4_n)^2
+    Where:
+    - R3_n is the radius of the center disk (same as Rest radius)
+    - H2_n is the height of the vertical line
+    - R4_n is the radius of the circles to be calculated
+    """
+    # Solve H2^2+R4^2=(R3+R4)^2
+    # H2^2+R4^2=R3^2+2*R3*R4+R4^2
+    # H2^2=R3^2+2*R3*R4
+    # R4=H2^2/(2*R3) - R3/2
+    return h2**2/(2*r3) - r3/2
 
 def load_calibration_data():
     """Load the latest calibration data"""
@@ -507,8 +590,7 @@ def main():
             while running:
                 # Ensure window is visible but not forcefully in foreground
                 ShowWindow(hwnd, SW_SHOW)
-                time.sleep(0.5)
-                
+                time.sleep(0.5)  # Check every half second
         except Exception as e:
             print(f"Error in window focus maintenance: {str(e)}")
         
@@ -704,6 +786,15 @@ def main():
                     # Track whether each disk has reached its target position
                     disks_completed = [False] * len(expect_disks)
                     
+                    # Store original positions and calculate target positions
+                    original_positions = []
+                    target_positions = []
+                    for i, expect in enumerate(expect_disks):
+                        original_positions.append((expect.center_x, expect.center_y))
+                        # Target position is Rest center minus Rest radius
+                        target_y = rest_centers[i][1] - rest_radii[i]
+                        target_positions.append((expect.center_x, target_y))
+                    
                     # Continue animation until all disks have reached their target or time is up
                     while time.time() - start_time < animation_duration and not all(disks_completed):
                         # Calculate time elapsed since last frame
@@ -726,20 +817,24 @@ def main():
                         # Update and draw each Expect disk
                         for i, expect in enumerate(expect_disks):
                             if not disks_completed[i]:
-                                # Calculate the target distance to move (equal to the Rest disk radius)
-                                target_distance = rest_radii[i]
+                                # Get original and target positions
+                                orig_pos = original_positions[i]
+                                target_pos = target_positions[i]
+                                
+                                # Calculate the total distance to move
+                                total_distance = orig_pos[1] - target_pos[1]
                                 
                                 # Calculate current distance moved
                                 current_distance = move_speed * elapsed
                                 
                                 # Check if the disk has reached its target distance
-                                if current_distance >= target_distance:
+                                if current_distance >= total_distance or total_distance <= 0:
                                     # Set to exact target position and mark as completed
-                                    expect.center_y = rest_centers[i][1] - target_distance
+                                    expect.center_y = target_pos[1]
                                     disks_completed[i] = True
                                 else:
                                     # Move the disk upwards based on elapsed time and speed
-                                    expect.center_y = rest_centers[i][1] - current_distance
+                                    expect.center_y = orig_pos[1] - current_distance
                             
                             # Display the Expect_n label
                             text = font.render(f"Expect_{i+1} (r={param_panel.expect_radius})", True, GREEN)
@@ -750,6 +845,11 @@ def main():
                             
                             # Draw the label
                             screen.blit(text, text_rect)
+                            
+                            # Draw target position indicator (for debugging)
+                            if not disks_completed[i]:
+                                target_y = target_positions[i][1]
+                                pygame.draw.circle(screen, RED, (expect.center_x, int(target_y)), 3, 1)
                         
                         # Update the display
                         pygame.display.flip()
@@ -771,7 +871,7 @@ def main():
                         pygame.time.delay(500)  # Half-second pause
                         
                         # Show the geometric shapes
-                        show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_data)
+                        show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_data, rest_disks, rest_radii)
                     
                     # Update the display one final time
                     pygame.display.flip()
@@ -965,11 +1065,17 @@ def main():
     sys.exit()
 
 # Function to draw the geometric shapes based on Expect disks
-def show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_data):
+def show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_data, rest_disks=None, rest_radii=None):
     """
-    Show geometric shapes animation where each Expect disk becomes P1 of a geometric shape
+    Show geometric shapes animation where:
+    1. Each Expect disk becomes P1 of a geometric shape
+    2. Each Rest disk becomes P3 of an upside-down geometric shape
+    3. P4 coincides with P2, creating a connected structure
+    4. When C key is pressed, the shapes move upward until P3 coincides with original donut center
+    
+    Note: H2_n (height of Rest_n shape) is ensured to be larger than the radius of Rest_n
     """
-    # Grey color for the shapes display
+    # Get colors
     GREY = (100, 100, 100)
     GREEN = (0, 255, 0)
     RED = (255, 0, 0)
@@ -977,8 +1083,44 @@ def show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_d
     # Get screen dimensions
     screen_width, screen_height = screen.get_size()
     
-    # Keep showing until R key is pressed
+    # Update Rest disk radius in parameter panel if rest disks are available
+    if rest_disks and len(rest_disks) > 0:
+        param_panel.update_rest_radius(int(rest_disks[0].radius))  # Convert to integer
+    
+    # Animation state variables
     waiting_for_r_key = True
+    moving_upward = False
+    
+    # Store original positions of shapes
+    original_positions = []
+    original_donut_centers = []
+    for i, expect in enumerate(expect_disks):
+        if rest_disks and i < len(rest_disks):
+            # Store original donut centers (where P1 was)
+            original_donut_centers.append((expect.center_x, expect.center_y))
+            # The target is the original donut center position
+            original_positions.append({
+                'p1': (expect.center_x, expect.center_y),
+                'p3': (rest_disks[i].center_x, rest_disks[i].center_y)
+            })
+    
+    # Movement speed (pixels per frame)
+    movement_speed = 2
+    
+    # Current vertical offset for animation
+    vertical_offset = 0
+    
+    # Target positions (where P3 should end up)
+    target_positions = []
+    original_donut_centers = []
+    for i, expect in enumerate(expect_disks):
+        if i < len(original_positions):
+            # Store original donut centers (where P1 was)
+            original_donut_centers.append(original_positions[i]['p1'])
+            # The target is the original donut center position
+            target_positions.append(original_positions[i]['p1'])
+    
+    # Main loop
     while waiting_for_r_key:
         # Clear screen with grey background
         screen.fill(GREY)
@@ -993,22 +1135,39 @@ def show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_d
                                (int(start_point[0]), int(start_point[1])),
                                (int(end_point[0]), int(end_point[1])), 1)
         
-        # Current parameter values
+        # Current parameter values for Expect_n shapes
         r1_n = param_panel.expect_radius  # Use Expect radius as R1_n
-        h_n = param_panel.h_n  # Height from parameter panel
+        h_n = param_panel.h_n             # Height from parameter panel
         
-        # Draw a geometric shape for each Expect disk
+        # Current parameter values for Rest_n shapes
+        h2_n = param_panel.h2_n           # Height for Rest_n shapes
+        
+        # Draw a geometric shape for each Expect disk (downward pointing)
         for i, expect in enumerate(expect_disks):
-            # Use Expect disk center as P1
-            p1 = (expect.center_x, expect.center_y)
+            if i >= len(original_positions):
+                continue
+                
+            # Get original positions
+            orig_p1 = original_positions[i]['p1']
+            orig_p3 = original_positions[i]['p3']
+            
+            # Apply vertical offset if moving upward
+            if moving_upward:
+                # Calculate current positions with offset
+                p1 = (orig_p1[0], orig_p1[1] - vertical_offset)
+                p3_y_pos = orig_p3[1] - vertical_offset
+            else:
+                # Use original positions
+                p1 = orig_p1
+                p3_y_pos = orig_p3[1]
             
             # Calculate R2_n using the formula
             r2_n = calculate_r2(r1_n, h_n)
             
-            # Calculate positions
-            p2 = (p1[0], p1[1] + h_n)  # Point below P1
-            a1 = (p2[0] - r2_n, p2[1])  # Left point
-            a2 = (p2[0] + r2_n, p2[1])  # Right point
+            # Calculate positions for Expect_n shape (downward)
+            p2 = (p1[0], p1[1] + h_n)       # Point below P1
+            a1 = (p2[0] - r2_n, p2[1])      # Left point
+            a2 = (p2[0] + r2_n, p2[1])      # Right point
             
             # Draw P1 (center point)
             pygame.draw.circle(screen, RED, p1, 3)
@@ -1022,8 +1181,8 @@ def show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_d
             pygame.draw.line(screen, WHITE, p1, p2, 1)
             
             # Draw horizontal black lines from P2 to A1 and A2
-            pygame.draw.line(screen, BLACK, p2, a1, 5)
-            pygame.draw.line(screen, BLACK, p2, a2, 5)
+            pygame.draw.line(screen, BLACK, p2, a1, 1)
+            pygame.draw.line(screen, BLACK, p2, a2, 1)
             
             # Draw P2 point
             pygame.draw.circle(screen, RED, p2, 3)
@@ -1052,14 +1211,176 @@ def show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_d
             # Blit the mask to the screen
             screen.blit(mask_surface, (0, 0))
             
-            # Display parameter values for this shape
-            shape_info = font.render(f"Shape_{i+1}: R1_n={r1_n}, H_n={h_n}, R2_n={r2_n:.2f}", True, WHITE)
+            # Draw the corresponding Rest_n shape (upside-down) if available
+            if rest_disks and i < len(rest_disks):
+                rest = rest_disks[i]
+                
+                # Calculate positions for Rest_n shape
+                # Make P4 coincide with P2, and calculate P3 position below
+                p4 = p2  # P4 is the same as P2
+                p3 = (p4[0], p4[1] + h2_n)  # P3 is below P4 (P2) by H2_n distance
+                
+                r3_n = rest.radius  # Radius of Rest disk is R3_n
+                
+                # Calculate R4_n using the formula
+                r4_n = calculate_r4(r3_n, h2_n)
+                
+                # Calculate A3 and A4 positions
+                a3 = (p4[0] - r4_n, p4[1])  # Left point at P4 level
+                a4 = (p4[0] + r4_n, p4[1])  # Right point at P4 level
+                
+                # Draw P3 (center point)
+                pygame.draw.circle(screen, RED, p3, 3)
+                text = font.render(f"P3_{i+1}", True, RED)
+                screen.blit(text, (p3[0] + 5, p3[1] + 5))
+                
+                # Debug text - show P3 coordinates in red on top layer
+                p3_coords = f"P3_{i+1} pos: ({p3[0]:.1f}, {p3[1]:.1f})"
+                p3_debug = font.render(p3_coords, True, RED)
+                screen.blit(p3_debug, (screen_width - 300, screen_height - 60 - i*25))
+                
+                # Add debugging for target position if moving upward
+                if moving_upward:
+                    current_h_n = param_panel.h_n
+                    current_h2_n = param_panel.h2_n
+                    target_distance = current_h_n + current_h2_n
+                    target_debug = f"Target distance: {target_distance}, Current offset: {vertical_offset:.1f}, Remaining: {target_distance - vertical_offset:.1f}"
+                    target_text = font.render(target_debug, True, RED)
+                    screen.blit(target_text, (screen_width - 500, screen_height - 90 - i*25))
+                
+                # Draw white disk around P3 with radius R3_n (same as Rest disk)
+                pygame.draw.circle(screen, WHITE, p3, r3_n)
+                
+                # Draw vertical white line from P3 to P4 (upward)
+                pygame.draw.line(screen, WHITE, p3, p4, 1)
+                
+                # Draw horizontal black lines from P4 to A3 and A4
+                pygame.draw.line(screen, BLACK, p4, a3, 1)
+                pygame.draw.line(screen, BLACK, p4, a4, 1)
+                
+                # P4 point is already drawn as P2
+                text = font.render(f"P4_{i+1}=P2_{i+1}", True, RED)
+                screen.blit(text, (p4[0] - 100, p4[1]))
+                
+                # Draw A3 and A4 points
+                pygame.draw.circle(screen, RED, a3, 3)
+                text = font.render(f"A3_{i+1}", True, RED)
+                screen.blit(text, (a3[0] - 20, a3[1] - 20))
+                
+                pygame.draw.circle(screen, RED, a4, 3)
+                text = font.render(f"A4_{i+1}", True, RED)
+                screen.blit(text, (a4[0] + 5, a4[1] - 20))
+                
+                # Create a surface for the upside-down triangle minus circles
+                mask_surface2 = pygame.Surface((screen_width, screen_height), pygame.SRCALPHA)
+                
+                # Draw the white filled triangle
+                pygame.draw.polygon(mask_surface2, WHITE, (p3, a3, a4))
+                
+                # Subtract the grey circles at A3 and A4
+                pygame.draw.circle(mask_surface2, (0, 0, 0, 0), a3, int(r4_n))
+                pygame.draw.circle(mask_surface2, (0, 0, 0, 0), a4, int(r4_n))
+                
+                # Blit the mask to the screen
+                screen.blit(mask_surface2, (0, 0))
+                
+                # Display parameter values for Rest_n shape
+                rest_info = font.render(f"Shape_Rest_{i+1}: R3_n={r3_n}, H2_n={h2_n}, R4_n={r4_n:.2f}", True, WHITE)
+                screen.blit(rest_info, (10, screen_height - 60 - i*25))
+                
+                # If moving upward, draw the target position (original donut center)
+                if moving_upward:
+                    progress_text = font.render(f"Moving: {vertical_offset:.1f}/{target_distance} pixels", True, GREEN)
+                    progress_rect = progress_text.get_rect(center=(screen_width // 2, screen_height - 30))
+                    screen.blit(progress_text, progress_rect)
+                
+                # Re-draw P3 on top of everything to ensure visibility
+                pygame.draw.circle(screen, (255, 0, 0), p3, 5, 0)  # Solid red circle
+                pygame.draw.circle(screen, (255, 255, 0), p3, 5, 1)  # Yellow outline
+                
+                # Debug text - show P3 coordinates in red on top layer
+                p3_coords = f"P3_{i+1} pos: ({p3[0]:.1f}, {p3[1]:.1f})"
+                p3_debug = font.render(p3_coords, True, RED)
+                screen.blit(p3_debug, (screen_width - 300, screen_height - 60 - i*25))
+                
+                # Add debugging for target position if moving upward
+                if moving_upward:
+                    current_h_n = param_panel.h_n
+                    current_h2_n = param_panel.h2_n
+                    target_distance = current_h_n + current_h2_n
+                    target_debug = f"Target distance: {target_distance}, Current offset: {vertical_offset:.1f}, Remaining: {target_distance - vertical_offset:.1f}"
+                    target_text = font.render(target_debug, True, RED)
+                    screen.blit(target_text, (screen_width - 500, screen_height - 90 - i*25))
+            
+            # Display parameter values for Expect_n shape
+            shape_info = font.render(f"Shape_Expect_{i+1}: R1_n={r1_n}, H_n={h_n}, R2_n={r2_n:.2f}", True, WHITE)
             screen.blit(shape_info, (10, 10 + i*25))
         
         # Draw instruction text
-        instruction_text = font.render("Press R to exit animation", True, WHITE)
-        instruction_rect = instruction_text.get_rect(center=(screen_width // 2, 30))
-        screen.blit(instruction_text, instruction_rect)
+        instructions = [
+            "Press R to exit animation",
+            "Press C to move shapes upward"
+        ]
+        
+        for idx, instruction in enumerate(instructions):
+            instruction_text = font.render(instruction, True, WHITE)
+            instruction_rect = instruction_text.get_rect(center=(screen_width // 2, 30 + idx*25))
+            screen.blit(instruction_text, instruction_rect)
+        
+        # Update vertical offset if moving upward
+        if moving_upward:
+            # Get current parameter values
+            current_h_n = param_panel.h_n
+            current_h2_n = param_panel.h2_n
+            
+            # Calculate the target distance to move (H_n + H2_n)
+            target_distance = current_h_n + current_h2_n
+            
+            # Check if we've reached the target distance
+            if vertical_offset >= target_distance:
+                vertical_offset = target_distance  # Snap to exact position
+                moving_upward = False  # Stop the animation
+                
+                # Permanently update the positions of all disks
+                for disk in expect_disks:
+                    disk.center_y -= vertical_offset
+                
+                for disk in rest_disks:
+                    disk.center_y -= vertical_offset
+                
+                # Update the original positions list to reflect the new positions
+                for i in range(len(original_positions)):
+                    orig_p1_x, orig_p1_y = original_positions[i]['p1']
+                    orig_p3_x, orig_p3_y = original_positions[i]['p3']
+                    
+                    # Update with new Y positions
+                    original_positions[i]['p1'] = (orig_p1_x, orig_p1_y - vertical_offset)
+                    original_positions[i]['p3'] = (orig_p3_x, orig_p3_y - vertical_offset)
+                
+                # Update original donut centers and target positions
+                for i in range(len(original_donut_centers)):
+                    center_x, center_y = original_donut_centers[i]
+                    original_donut_centers[i] = (center_x, center_y - vertical_offset)
+                    
+                for i in range(len(target_positions)):
+                    target_x, target_y = target_positions[i]
+                    target_positions[i] = (target_x, target_y - vertical_offset)
+                
+                # Reset vertical offset since positions are now permanently updated
+                vertical_offset = 0
+                
+                # Display completion message
+                complete_text = font.render(f"Movement Complete! Moved upward by {target_distance} pixels (H_n + H2_n)", True, GREEN)
+                complete_rect = complete_text.get_rect(center=(screen_width // 2, screen_height - 30))
+                screen.blit(complete_text, complete_rect)
+            else:
+                # Continue moving upward
+                vertical_offset += movement_speed
+                
+                # Display progress information
+                progress_text = font.render(f"Moving: {vertical_offset:.1f}/{target_distance} pixels", True, GREEN)
+                progress_rect = progress_text.get_rect(center=(screen_width // 2, screen_height - 30))
+                screen.blit(progress_text, progress_rect)
         
         # Update the display
         pygame.display.flip()
@@ -1072,6 +1393,10 @@ def show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_d
             elif evt.type == pygame.KEYDOWN:
                 if evt.key == pygame.K_r or evt.key == pygame.K_ESCAPE:
                     waiting_for_r_key = False
+                elif evt.key == pygame.K_c and not moving_upward:
+                    # Start the upward movement animation
+                    moving_upward = True
+                    vertical_offset = 0
         
         # Add a small delay to limit frame rate
         pygame.time.delay(30)
