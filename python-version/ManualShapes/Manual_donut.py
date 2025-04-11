@@ -34,7 +34,7 @@ BLACK = (0, 0, 0)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 YELLOW = (255, 255, 0)
-GREY = (100, 100, 100)
+GREY = (30, 30, 30)
 
 class Donut:
     def __init__(self, x, y, outer_radius=150, inner_radius=75, visible=True):
@@ -645,7 +645,7 @@ def main():
     SCALE_DELAY_MAX = 3  # Only apply scaling every 3 frames
     
     # Colors
-    BLACK = (60, 60, 60)
+    BLACK = (0, 0, 0)
     WHITE = (255, 255, 255)
     RED = (255, 0, 0)
     GREEN = (0, 255, 0)
@@ -1076,7 +1076,7 @@ def show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_d
     Note: H2_n (height of Rest_n shape) is ensured to be larger than the radius of Rest_n
     """
     # Get colors
-    GREY = (100, 100, 100)
+    GREY = (0, 0, 0)
     GREEN = (0, 255, 0)
     RED = (255, 0, 0)
     
