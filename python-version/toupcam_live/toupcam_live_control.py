@@ -219,7 +219,8 @@ class ToupCamLiveControl:
             self.hcam.put_AutoExpoEnable(False)
             
             # Set anti-flicker to 60Hz (for 16.67ms exposure)
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_ANTIFLICKER, 2)  # 60Hz
+            # self.hcam.put_Option(toupcam.TOUPCAM_OPTION_ANTIFLICKER, 2)  # 60Hz
+            self.hcam.put_HZ(2)
             
             # Set exposure time (in microseconds)
             self.hcam.put_ExpoTime(16670)  # 16.67ms
@@ -230,7 +231,14 @@ class ToupCamLiveControl:
             self.hcam.put_Gamma(100)  # 1.0
             
             # Register callback
-            self.hcam.StartPullModeWithCallback(self.on_frame)
+            self.hcam.StartPullModeWithCallback(self.on_frame, self)
+            
+            # Set running flag to True to enable image processing
+            self.running = True
+            
+            # Allocate buffer for image data
+            buffer_size = toupcam.TDIBWIDTHBYTES(self.frame_width * 24) * self.frame_height
+            self.cam_buffer = bytes(buffer_size)
             
             self.status_var.set(f"Camera started: {device.displayname}")
             
@@ -252,48 +260,48 @@ class ToupCamLiveControl:
         return binning_map.get(binning_mode, f"Unknown ({hex(binning_mode)})")
     
     def on_frame(self, nEvent, ctx):
-        """Static callback function for the camera events"""
-        if nEvent == toupcam.TOUPCAM_EVENT_IMAGE:
-            ctx.process_image()
-        elif nEvent == toupcam.TOUPCAM_EVENT_EXPOSURE:
-            ctx.status_var.set("Auto exposure adjustment in progress")
-        elif nEvent == toupcam.TOUPCAM_EVENT_TEMPTINT:
-            ctx.status_var.set("White balance adjustment in progress")
-        elif nEvent == toupcam.TOUPCAM_EVENT_ERROR:
-            ctx.status_var.set("Camera error occurred")
-        elif nEvent == toupcam.TOUPCAM_EVENT_DISCONNECTED:
-            ctx.status_var.set("Camera disconnected")
+        print(f"[DEBUG] on_frame called: nEvent={nEvent}, ctx={ctx}")
+        try:
+            if nEvent == toupcam.TOUPCAM_EVENT_IMAGE:
+                print("[DEBUG] TOUPCAM_EVENT_IMAGE received, calling process_image")
+                ctx.process_image()
+            elif nEvent == toupcam.TOUPCAM_EVENT_EXPOSURE:
+                ctx.status_var.set("Auto exposure adjustment in progress")
+            elif nEvent == toupcam.TOUPCAM_EVENT_TEMPTINT:
+                ctx.status_var.set("White balance adjustment in progress")
+            elif nEvent == toupcam.TOUPCAM_EVENT_ERROR:
+                ctx.status_var.set("Camera error occurred")
+            elif nEvent == toupcam.TOUPCAM_EVENT_DISCONNECTED:
+                ctx.status_var.set("Camera disconnected")
+        except Exception as e:
+            print(f"[ERROR] Exception in on_frame: {e}")
     
     def process_image(self):
-        """Process the image received from the camera"""
+        print("[DEBUG] process_image called")
         if not self.running or not self.hcam:
+            print("[DEBUG] process_image: not running or no hcam")
             return
-        
         try:
             # Pull the image from the camera with minimal processing
             self.hcam.PullImageV4(self.cam_buffer, 0, 24, 0, None)
-            
+            print("[DEBUG] PullImageV4 succeeded")
             # Convert the raw buffer to a numpy array (optimized)
             frame = np.frombuffer(self.cam_buffer, dtype=np.uint8)
-            
             # Reshape the array to an image format
             frame = frame.reshape((self.frame_height, toupcam.TDIBWIDTHBYTES(self.frame_width * 24) // 3, 3))
             frame = frame[:, :self.frame_width, :]
-            
             # Convert BGR to RGB (ToupCam provides BGR by default)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
             # Store the frame (no copy to reduce latency)
             self.frame_buffer = frame
-            
             # Count frames for FPS calculation
             self.frame_count += 1
-            
             # Schedule UI update immediately
             self.root.after_idle(self.update_frame)
-            
         except toupcam.HRESULTException as ex:
-            print(f"Error pulling image: 0x{ex.hr & 0xffffffff:x}")
+            print(f"[ERROR] Error pulling image: 0x{ex.hr & 0xffffffff:x}")
+        except Exception as e:
+            print(f"[ERROR] process_image exception: {e}")
     
     def update_frame(self):
         """Update the UI with the latest frame (called on the main thread)"""

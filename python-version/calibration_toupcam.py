@@ -65,6 +65,14 @@ class ToupCamProjectorCalibration:
         self.frame_buffer = None
         self.running = False
         
+        # Color inversion state
+        self.inverted_colors = False
+        
+        # Camera exposure settings
+        self.exposure_time = 8333  # Default: 8.333ms in microseconds
+        self.min_exposure = 1000   # 1ms
+        self.max_exposure = 100000 # 100ms
+        
         # Store screen circle parameters
         scale_x = self.projector_width / 2560
         scale_y = self.projector_height / 1600
@@ -133,7 +141,7 @@ class ToupCamProjectorCalibration:
                 
                 # Set exposure time to 8.333ms (optimal for 60Hz)
                 self.hcam.put_AutoExpoEnable(False)  # Disable auto exposure
-                self.hcam.put_ExpoTime(8333)  # 8.333ms in microseconds
+                self.hcam.put_ExpoTime(self.exposure_time)  # Use the exposure time variable
                 
                 # Set other options for low latency
                 self.hcam.put_Option(toupcam.TOUPCAM_OPTION_NOPACKET_TIMEOUT, 0)  # Disable packet timeout
@@ -199,33 +207,11 @@ class ToupCamProjectorCalibration:
                               highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
         
-        # Draw first white circle (larger)
-        self.canvas.create_oval(
-            self.screen_circle1_x - self.screen_circle1_radius,
-            self.screen_circle1_y - self.screen_circle1_radius,
-            self.screen_circle1_x + self.screen_circle1_radius,
-            self.screen_circle1_y + self.screen_circle1_radius,
-            fill='white', outline='white'
-        )
+        # Draw calibration pattern
+        self.draw_calibration_pattern()
         
-        # Draw second white circle (smaller)
-        self.canvas.create_oval(
-            self.screen_circle2_x - self.screen_circle2_radius,
-            self.screen_circle2_y - self.screen_circle2_radius,
-            self.screen_circle2_x + self.screen_circle2_radius,
-            self.screen_circle2_y + self.screen_circle2_radius,
-            fill='white', outline='white'
-        )
-        
-        # Add rotation indicator line
-        line_length = self.screen_circle1_radius * 0.8
-        self.canvas.create_line(
-            self.screen_circle1_x, 
-            self.screen_circle1_y,
-            self.screen_circle1_x + line_length, 
-            self.screen_circle1_y,
-            fill='black', width=2
-        )
+        # Bind key events for color inversion
+        self.root.bind('<KeyPress>', self.handle_key_press)
         
         # Create camera window - sized appropriately for the high resolution
         cv2.namedWindow("Camera View", cv2.WINDOW_NORMAL)
@@ -237,7 +223,37 @@ class ToupCamProjectorCalibration:
         # Create control window
         self.control_window = tk.Toplevel(self.root)
         self.control_window.title("Calibration Control")
-        self.control_window.geometry("250x200")  
+        self.control_window.geometry("300x350")  # Increased height for exposure controls
+        
+        # Add exposure control frame
+        exposure_frame = ttk.LabelFrame(self.control_window, text="Exposure Control")
+        exposure_frame.pack(pady=10, padx=10, fill=tk.X)
+        
+        # Add exposure value label
+        self.exposure_value_var = tk.StringVar(value=f"Exposure: {self.exposure_time/1000:.2f} ms")
+        exposure_label = ttk.Label(
+            exposure_frame,
+            textvariable=self.exposure_value_var
+        )
+        exposure_label.pack(pady=(5,0), padx=5)
+        
+        # Add exposure slider
+        self.exposure_slider = ttk.Scale(
+            exposure_frame,
+            from_=self.min_exposure,
+            to=self.max_exposure,
+            orient=tk.HORIZONTAL,
+            value=self.exposure_time,
+            command=self.update_exposure
+        )
+        self.exposure_slider.pack(pady=5, padx=5, fill=tk.X)
+        
+        # Add min/max labels
+        exposure_range_frame = ttk.Frame(exposure_frame)
+        exposure_range_frame.pack(fill=tk.X, padx=5)
+        
+        ttk.Label(exposure_range_frame, text=f"{self.min_exposure/1000:.1f} ms").pack(side=tk.LEFT)
+        ttk.Label(exposure_range_frame, text=f"{self.max_exposure/1000:.1f} ms").pack(side=tk.RIGHT)
         
         # Add calibrate button
         self.calibrate_button = ttk.Button(
@@ -269,6 +285,87 @@ class ToupCamProjectorCalibration:
         style = ttk.Style()
         style.configure('Accent.TButton', foreground='red')
         
+    def draw_calibration_pattern(self):
+        """Draw the calibration pattern with current color settings"""
+        # Clear previous pattern
+        self.canvas.delete("all")
+        
+        # Set colors based on inversion state
+        bg_color = 'white' if self.inverted_colors else 'black'
+        fg_color = 'black' if self.inverted_colors else 'white'
+        line_color = 'white' if self.inverted_colors else 'black'
+        
+        # Set canvas background
+        self.canvas.configure(bg=bg_color)
+        
+        # Draw first circle (larger)
+        self.canvas.create_oval(
+            self.screen_circle1_x - self.screen_circle1_radius,
+            self.screen_circle1_y - self.screen_circle1_radius,
+            self.screen_circle1_x + self.screen_circle1_radius,
+            self.screen_circle1_y + self.screen_circle1_radius,
+            fill=fg_color, outline=fg_color
+        )
+        
+        # Draw second circle (smaller)
+        self.canvas.create_oval(
+            self.screen_circle2_x - self.screen_circle2_radius,
+            self.screen_circle2_y - self.screen_circle2_radius,
+            self.screen_circle2_x + self.screen_circle2_radius,
+            self.screen_circle2_y + self.screen_circle2_radius,
+            fill=fg_color, outline=fg_color
+        )
+        
+        # Add rotation indicator line
+        line_length = self.screen_circle1_radius * 0.8
+        self.canvas.create_line(
+            self.screen_circle1_x, 
+            self.screen_circle1_y,
+            self.screen_circle1_x + line_length, 
+            self.screen_circle1_y,
+            fill=line_color, width=2
+        )
+        
+        # Redraw FOV outline if it exists
+        if hasattr(self, 'fov_screen_corners') and self.fov_screen_corners:
+            for i in range(len(self.fov_screen_corners)):
+                start = self.fov_screen_corners[i]
+                end = self.fov_screen_corners[(i + 1) % len(self.fov_screen_corners)]
+                self.canvas.create_line(start[0], start[1], end[0], end[1],
+                                     fill='red', width=2, tags="fov")
+    
+    def handle_key_press(self, event):
+        """Handle key press events"""
+        if event.char.upper() == 'C':
+            # Toggle color inversion
+            self.inverted_colors = not self.inverted_colors
+            print(f"Colors {'inverted' if self.inverted_colors else 'reset to default'}")
+            
+            # Redraw the calibration pattern with new colors
+            self.draw_calibration_pattern()
+            
+            # Update status
+            self.status_var.set(f"Colors {'inverted' if self.inverted_colors else 'reset to default'}")
+    
+    def update_exposure(self, value):
+        """Update the camera exposure time"""
+        if not self.hcam:
+            return
+            
+        # Convert to integer
+        exposure = int(float(value))
+        self.exposure_time = exposure
+        
+        # Update the display
+        self.exposure_value_var.set(f"Exposure: {exposure/1000:.2f} ms")
+        
+        try:
+            # Update camera exposure
+            self.hcam.put_ExpoTime(exposure)
+            print(f"Exposure time set to {exposure/1000:.2f} ms")
+        except toupcam.HRESULTException as ex:
+            print(f"Error setting exposure: 0x{ex.hr & 0xffffffff:x}")
+            
     def detect_circle(self, frame):
         """Detect two white circles in the camera frame"""
         # Flip the frame both horizontally and vertically to correct orientation

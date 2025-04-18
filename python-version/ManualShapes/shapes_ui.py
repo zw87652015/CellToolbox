@@ -39,6 +39,16 @@ class ShapesUI:
         )
         self.donut_button.pack(pady=10)
         
+        self.ushape_button = tk.Button(
+            self.button_frame, 
+            text="Manual U-Shape", 
+            command=self.launch_ushape,
+            width=20,
+            height=2,
+            font=("Arial", 12)
+        )
+        self.ushape_button.pack(pady=10)
+        
         # Create exit button
         self.exit_button = tk.Button(
             self.root, 
@@ -60,6 +70,12 @@ class ShapesUI:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         donut_script = os.path.join(script_dir, "Manual_donut.py")
         subprocess.Popen([sys.executable, donut_script])
+    
+    def launch_ushape(self):
+        """Launch the manual U-shape tool"""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        ushape_script = os.path.join(script_dir, "Manual_u_shape.py")
+        subprocess.Popen([sys.executable, ushape_script])
 
 def main():
     root = tk.Tk()

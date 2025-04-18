@@ -30,7 +30,7 @@ GetCurrentThreadId = ctypes.windll.kernel32.GetCurrentThreadId
 
 # Color constants
 WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
+BLACK = (30, 30, 30)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 YELLOW = (255, 255, 0)
@@ -642,10 +642,10 @@ def main():
     
     # Scaling delay for keyboard (to slow down continuous scaling)
     scale_delay = 0
-    SCALE_DELAY_MAX = 3  # Only apply scaling every 3 frames
+    SCALE_DELAY_MAX = 3  # Only apply scalingaevery 3 frames
     
     # Colors
-    BLACK = (0, 0, 0)
+    BLACK = (30, 30, 30)
     WHITE = (255, 255, 255)
     RED = (255, 0, 0)
     GREEN = (0, 255, 0)
@@ -1076,7 +1076,7 @@ def show_geometric_shapes(screen, expect_disks, param_panel, font, calibration_d
     Note: H2_n (height of Rest_n shape) is ensured to be larger than the radius of Rest_n
     """
     # Get colors
-    GREY = (0, 0, 0)
+    GREY = (30, 30, 30)
     GREEN = (0, 255, 0)
     RED = (255, 0, 0)
     

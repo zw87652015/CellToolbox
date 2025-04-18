@@ -66,11 +66,27 @@ class Rectangle:
             # Draw filled rectangle with border
             pygame.draw.rect(screen, WHITE, self.rect)
             pygame.draw.rect(screen, YELLOW if selected else WHITE, self.rect, 2)
+            
+            # Display width and height in yellow text
+            font = pygame.font.SysFont('Arial', 16)
+            # Width text - placed below the rectangle
+            width_text = font.render(f"W: {self.rect.width}", True, YELLOW)
+            screen.blit(width_text, (self.rect.x + 5, self.rect.bottom + 2))
+            # Height text - placed to the right of the rectangle
+            height_text = font.render(f"H: {self.rect.height}", True, YELLOW)
+            screen.blit(height_text, (self.rect.right + 2, self.rect.y + 5))
         else:
             # Draw just the outline for hidden rectangles
             color = YELLOW if selected else WHITE
             line_thickness = 1  # Thin line
             pygame.draw.rect(screen, color, self.rect, line_thickness)
+            
+            # Display width and height for hidden rectangles too
+            font = pygame.font.SysFont('Arial', 16)
+            width_text = font.render(f"W: {self.rect.width}", True, YELLOW)
+            screen.blit(width_text, (self.rect.x + 5, self.rect.bottom + 2))
+            height_text = font.render(f"H: {self.rect.height}", True, YELLOW)
+            screen.blit(height_text, (self.rect.right + 2, self.rect.y + 5))
     
     def to_dict(self):
         """Convert rectangle to dictionary for saving"""
@@ -215,8 +231,10 @@ def main():
         # Create a default rectangle if no file exists or it's invalid
         rectangles.append(Rectangle(screen_width // 4, screen_height // 4))
     
-    # Currently selected rectangle (None if no rectangle is selected)
-    selected_rect_index = None if not rectangles else 0
+    # Currently selected rectangle(s)
+    selected_rect_indices = set()
+    if rectangles:
+        selected_rect_indices.add(0)
     
     # Constants
     resize_margin = 10  # Pixels from edge where resizing is activated
@@ -265,6 +283,9 @@ def main():
         except Exception as e:
             print(f"Error saving rectangles: {str(e)}")
     
+    # Clipboard for copying rectangles
+    clipboard_rects = []
+    
     # Main game loop
     running = True
     clock = pygame.time.Clock()
@@ -298,6 +319,41 @@ def main():
                 elif event.key in keys_pressed:
                     keys_pressed[event.key] = True
                 
+                # Copy the selected rectangle(s) with Ctrl+C
+                elif event.key == pygame.K_c and (pygame.key.get_mods() & pygame.KMOD_CTRL):
+                    if selected_rect_indices:
+                        # Copy the selected rectangle(s) to clipboard
+                        clipboard_rects = []
+                        for idx in selected_rect_indices:
+                            source_rect = rectangles[idx]
+                            clipboard_rects.append(Rectangle(
+                                source_rect.rect.x,
+                                source_rect.rect.y,
+                                source_rect.rect.width,
+                                source_rect.rect.height,
+                                source_rect.visible
+                            ))
+                        print(f"{len(clipboard_rects)} rectangle(s) copied to clipboard")
+                
+                # Paste the copied rectangle(s) with Ctrl+V
+                elif event.key == pygame.K_v and (pygame.key.get_mods() & pygame.KMOD_CTRL):
+                    if clipboard_rects:
+                        # Create new rectangles at a slightly offset position
+                        new_indices = set()
+                        for clipboard_rect in clipboard_rects:
+                            new_rect = Rectangle(
+                                clipboard_rect.rect.x + 20,
+                                clipboard_rect.rect.y + 20,
+                                clipboard_rect.rect.width,
+                                clipboard_rect.rect.height,
+                                clipboard_rect.visible
+                            )
+                            rectangles.append(new_rect)
+                            new_indices.add(len(rectangles) - 1)
+                        # Update selection to the newly pasted rectangles
+                        selected_rect_indices = new_indices
+                        print(f"{len(clipboard_rects)} rectangle(s) pasted from clipboard")
+                
                 # Toggle visibility of rectangle under pointer with 'h' key
                 elif event.key == pygame.K_h:
                     if hover_rect_index is not None:
@@ -306,16 +362,26 @@ def main():
                 # Add new rectangle at pointer position with 'j' key
                 elif event.key == pygame.K_j:
                     rectangles.append(Rectangle(mouse_x, mouse_y))
-                    selected_rect_index = len(rectangles) - 1
+                    selected_rect_indices = {len(rectangles) - 1}
                 
                 # Delete rectangle under pointer with 'k' key
                 elif event.key == pygame.K_k:
                     if hover_rect_index is not None:
+                        # Remove the deleted index from selected indices
+                        if hover_rect_index in selected_rect_indices:
+                            selected_rect_indices.remove(hover_rect_index)
+                        
+                        # Adjust indices of selected rectangles after the deleted one
+                        adjusted_indices = set()
+                        for idx in selected_rect_indices:
+                            if idx > hover_rect_index:
+                                adjusted_indices.add(idx - 1)
+                            else:
+                                adjusted_indices.add(idx)
+                        selected_rect_indices = adjusted_indices
+                        
+                        # Delete the rectangle
                         del rectangles[hover_rect_index]
-                        if selected_rect_index == hover_rect_index:
-                            selected_rect_index = None
-                        elif selected_rect_index is not None and selected_rect_index > hover_rect_index:
-                            selected_rect_index -= 1
                 
                 # Save rectangles when 's' is pressed
                 elif event.key == pygame.K_s:
@@ -330,19 +396,35 @@ def main():
                 # Check if clicking on a resize corner
                 resize_index = find_resize_corner_under_pointer(mouse_x, mouse_y)
                 if resize_index is not None:
-                    selected_rect_index = resize_index
-                    rectangles[selected_rect_index].resizing = True
+                    # Select only this rectangle for resizing if Shift is not held
+                    if not (pygame.key.get_mods() & pygame.KMOD_SHIFT):
+                        selected_rect_indices = {resize_index}
+                    else:
+                        selected_rect_indices.add(resize_index)
+                    rectangles[resize_index].resizing = True
                 
                 # Check if clicking inside a rectangle
                 elif hover_rect_index is not None:
-                    selected_rect_index = hover_rect_index
-                    rect = rectangles[selected_rect_index]
-                    rect.dragging = True
-                    rect.drag_offset_x = rect.rect.x - mouse_x
-                    rect.drag_offset_y = rect.rect.y - mouse_y
+                    # If Shift is held, toggle selection of this rectangle
+                    if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                        if hover_rect_index in selected_rect_indices:
+                            selected_rect_indices.remove(hover_rect_index)
+                        else:
+                            selected_rect_indices.add(hover_rect_index)
+                    else:
+                        # Without Shift, select only this rectangle
+                        selected_rect_indices = {hover_rect_index}
+                    
+                    # Start dragging all selected rectangles
+                    for idx in selected_rect_indices:
+                        rect = rectangles[idx]
+                        rect.dragging = True
+                        rect.drag_offset_x = rect.rect.x - mouse_x
+                        rect.drag_offset_y = rect.rect.y - mouse_y
                 else:
-                    # Deselect if clicking on empty space
-                    selected_rect_index = None
+                    # Deselect if clicking on empty space and Shift is not held
+                    if not (pygame.key.get_mods() & pygame.KMOD_SHIFT):
+                        selected_rect_indices = set()
             
             elif event.type == pygame.MOUSEBUTTONUP:
                 # Stop dragging and resizing for all rectangles
@@ -353,7 +435,7 @@ def main():
             elif event.type == pygame.MOUSEMOTION:
                 # Handle dragging and resizing
                 for i, rect in enumerate(rectangles):
-                    if i == selected_rect_index:
+                    if i in selected_rect_indices:
                         if rect.dragging:
                             rect.rect.x = mouse_x + rect.drag_offset_x
                             rect.rect.y = mouse_y + rect.drag_offset_y
@@ -362,23 +444,24 @@ def main():
                             new_height = mouse_y - rect.rect.top
                             rect.resize(new_width, new_height)
         
-        # Handle continuous keyboard movement for selected rectangle
-        if selected_rect_index is not None:
+        # Handle continuous keyboard movement for selected rectangles
+        if selected_rect_indices:
             speed = MOVE_SPEED_FAST if keys_pressed[pygame.K_LSHIFT] or keys_pressed[pygame.K_RSHIFT] else MOVE_SPEED
-            rect = rectangles[selected_rect_index]
-            
-            if keys_pressed[pygame.K_LEFT]:
-                rect.move(-speed, 0)
-            if keys_pressed[pygame.K_RIGHT]:
-                rect.move(speed, 0)
-            if keys_pressed[pygame.K_UP]:
-                rect.move(0, -speed)
-            if keys_pressed[pygame.K_DOWN]:
-                rect.move(0, speed)
+            for idx in selected_rect_indices:
+                rect = rectangles[idx]
+                
+                if keys_pressed[pygame.K_LEFT]:
+                    rect.move(-speed, 0)
+                if keys_pressed[pygame.K_RIGHT]:
+                    rect.move(speed, 0)
+                if keys_pressed[pygame.K_UP]:
+                    rect.move(0, -speed)
+                if keys_pressed[pygame.K_DOWN]:
+                    rect.move(0, speed)
         
         # Draw all rectangles
         for i, rect in enumerate(rectangles):
-            is_selected = (i == selected_rect_index)
+            is_selected = (i in selected_rect_indices)
             rect.draw(screen, WHITE, BLACK, YELLOW, is_selected)
         
         # Display instructions
@@ -388,10 +471,13 @@ def main():
             "H: Hide/Show rectangle under cursor",
             "K: Delete rectangle under cursor",
             "Click: Select rectangle",
-            "Click+Drag: Move rectangle",
+            "Shift+Click: Multi-select rectangles",
+            "Click+Drag: Move rectangle(s)",
             "Click on corner: Resize rectangle",
-            "Arrow keys: Move selected rectangle",
+            "Arrow keys: Move selected rectangle(s)",
             "Shift+Arrows: Move faster",
+            "Ctrl+C: Copy selected rectangle(s)",
+            "Ctrl+V: Paste copied rectangle(s)",
             "S: Save rectangles",
             "ESC: Exit"
         ]
