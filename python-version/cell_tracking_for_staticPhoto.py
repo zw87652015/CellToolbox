@@ -281,7 +281,7 @@ if __name__ == "__main__":
     
     for i in range(n_runs):
         print(f"\nRun {i+1}/{n_runs}")
-        time_taken = process_image('test6.png')
+        time_taken = process_image('test7.jpg')
         times.append(time_taken)
     
     avg_time = sum(times) / len(times)

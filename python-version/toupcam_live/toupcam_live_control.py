@@ -16,6 +16,23 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 from tkinter import messagebox
 
+# Win32 constants for window management
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SW_SHOW = 5
+SWP_SHOWWINDOW = 0x0040
+
+# Win32 API functions
+SetWindowPos = ctypes.windll.user32.SetWindowPos
+ShowWindow = ctypes.windll.user32.ShowWindow
+BringWindowToTop = ctypes.windll.user32.BringWindowToTop
+AttachThreadInput = ctypes.windll.user32.AttachThreadInput
+GetForegroundWindow = ctypes.windll.user32.GetForegroundWindow
+GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
+GetCurrentThreadId = ctypes.windll.kernel32.GetCurrentThreadId
+
 # Add the toupcam SDK path to the Python path
 sdk_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'toupcamsdk.20241216', 'python')
 sys.path.append(sdk_path)
@@ -80,11 +97,27 @@ class ToupCamLiveControl:
         self.fps = 0
         self.last_fps_time = time.time()
         
+        # Window focus maintenance
+        self.focus_thread = None
+        self.focus_running = False
+        
+        # Rendering thread
+        self.render_thread = None
+        self.render_running = False
+        self.new_frame_available = False
+        self.frame_lock = threading.Lock()
+        
         # Create UI
         self.create_ui()
         
         # Start camera
         self.start_camera()
+        
+        # Start window focus maintenance
+        self.start_focus_maintenance()
+        
+        # Start rendering thread
+        self.start_render_thread()
     
     def load_binning_settings(self):
         """Load binning settings from file"""
@@ -214,12 +247,15 @@ class ToupCamLiveControl:
             self.frame_width, self.frame_height = self.hcam.get_Size()
             print(f"Camera resolution: {self.frame_width}x{self.frame_height}")
             
-            # Set camera properties
+            # Set camera properties for optimal performance
             self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BYTEORDER, 0)  # RGB
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_UPSIDE_DOWN, 0)  # Normal orientation
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_FRAME_DEQUE_LENGTH, 2)  # Minimize frame queue
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_CALLBACK_THREAD, 1)  # Enable dedicated callback thread
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_THREAD_PRIORITY, 2)  # Set high thread priority
             self.hcam.put_AutoExpoEnable(False)
             
             # Set anti-flicker to 60Hz (for 16.67ms exposure)
-            # self.hcam.put_Option(toupcam.TOUPCAM_OPTION_ANTIFLICKER, 2)  # 60Hz
             self.hcam.put_HZ(2)
             
             # Set exposure time (in microseconds)
@@ -230,15 +266,22 @@ class ToupCamLiveControl:
             self.hcam.put_Contrast(0)
             self.hcam.put_Gamma(100)  # 1.0
             
+            # Allocate buffer for image data (pre-allocate to avoid reallocations)
+            buffer_size = toupcam.TDIBWIDTHBYTES(self.frame_width * 24) * self.frame_height
+            self.cam_buffer = bytes(buffer_size)
+            
+            # Pre-allocate numpy array for frame buffer to avoid memory allocations
+            self.frame_buffer_shape = (self.frame_height, toupcam.TDIBWIDTHBYTES(self.frame_width * 24) // 3, 3)
+            
+            # Initialize frame timing variables
+            self.last_frame_time = time.time()
+            self.frame_interval = 1.0 / 60.0  # Target 60 FPS
+            
             # Register callback
             self.hcam.StartPullModeWithCallback(self.on_frame, self)
             
             # Set running flag to True to enable image processing
             self.running = True
-            
-            # Allocate buffer for image data
-            buffer_size = toupcam.TDIBWIDTHBYTES(self.frame_width * 24) * self.frame_height
-            self.cam_buffer = bytes(buffer_size)
             
             self.status_var.set(f"Camera started: {device.displayname}")
             
@@ -260,10 +303,8 @@ class ToupCamLiveControl:
         return binning_map.get(binning_mode, f"Unknown ({hex(binning_mode)})")
     
     def on_frame(self, nEvent, ctx):
-        print(f"[DEBUG] on_frame called: nEvent={nEvent}, ctx={ctx}")
         try:
             if nEvent == toupcam.TOUPCAM_EVENT_IMAGE:
-                print("[DEBUG] TOUPCAM_EVENT_IMAGE received, calling process_image")
                 ctx.process_image()
             elif nEvent == toupcam.TOUPCAM_EVENT_EXPOSURE:
                 ctx.status_var.set("Auto exposure adjustment in progress")
@@ -277,27 +318,36 @@ class ToupCamLiveControl:
             print(f"[ERROR] Exception in on_frame: {e}")
     
     def process_image(self):
-        print("[DEBUG] process_image called")
         if not self.running or not self.hcam:
-            print("[DEBUG] process_image: not running or no hcam")
             return
+            
+        # Track frame timing for FPS calculation
+        current_time = time.time()
+        self.last_frame_time = current_time
+            
         try:
             # Pull the image from the camera with minimal processing
             self.hcam.PullImageV4(self.cam_buffer, 0, 24, 0, None)
-            print("[DEBUG] PullImageV4 succeeded")
-            # Convert the raw buffer to a numpy array (optimized)
-            frame = np.frombuffer(self.cam_buffer, dtype=np.uint8)
-            # Reshape the array to an image format
-            frame = frame.reshape((self.frame_height, toupcam.TDIBWIDTHBYTES(self.frame_width * 24) // 3, 3))
+            
+            # Convert the raw buffer to a numpy array without copying data
+            frame = np.frombuffer(self.cam_buffer, dtype=np.uint8).reshape(self.frame_buffer_shape)
             frame = frame[:, :self.frame_width, :]
-            # Convert BGR to RGB (ToupCam provides BGR by default)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
             # Store the frame (no copy to reduce latency)
-            self.frame_buffer = frame
+            with self.frame_lock:
+                self.frame_buffer = frame
+                self.new_frame_available = True
+            
             # Count frames for FPS calculation
             self.frame_count += 1
-            # Schedule UI update immediately
-            self.root.after_idle(self.update_frame)
+            if current_time - self.last_fps_time >= 1.0:
+                self.fps = self.frame_count / (current_time - self.last_fps_time)
+                self.fps_label.configure(text=f"FPS: {self.fps:.1f}")
+                self.status_var.set(f"Camera running: {self.fps:.1f} FPS")
+                self.frame_count = 0
+                self.last_fps_time = current_time
+                
+            # No need to schedule UI updates here - the render thread handles that
         except toupcam.HRESULTException as ex:
             print(f"[ERROR] Error pulling image: 0x{ex.hr & 0xffffffff:x}")
         except Exception as e:
@@ -325,9 +375,12 @@ class ToupCamLiveControl:
                 display_width = canvas_width
                 display_height = int(display_width / aspect_ratio)
             
-            # Resize the frame (use NEAREST for speed)
-            display_frame = cv2.resize(self.frame_buffer, (display_width, display_height), 
-                                      interpolation=cv2.INTER_NEAREST)
+            # Convert BGR to RGB for display
+            rgb_frame = cv2.cvtColor(self.frame_buffer, cv2.COLOR_BGR2RGB)
+            
+            # Resize the frame
+            display_frame = cv2.resize(rgb_frame, (display_width, display_height), 
+                                      interpolation=cv2.INTER_LINEAR)
             
             # Convert to PhotoImage
             img = Image.fromarray(display_frame)
@@ -450,17 +503,84 @@ class ToupCamLiveControl:
             self.gain_scale.set(slider_value)
             self.gain_value.configure(text=str(self.gain))
     
+    def start_focus_maintenance(self):
+        """Start a thread to maintain window focus and ensure consistent frame updates"""
+        self.focus_running = True
+        self.focus_thread = threading.Thread(target=self.maintain_window_focus)
+        self.focus_thread.daemon = True
+        self.focus_thread.start()
+        print("Window focus maintenance thread started")
+    
+    def maintain_window_focus(self):
+        """Maintain window focus to ensure consistent frame updates"""
+        try:
+            # Get the window handle from Tkinter
+            hwnd = int(self.root.winfo_id())
+            print(f"Focus thread got window handle: {hwnd}")
+            
+            # Initial window setup - make it visible but not forcing foreground
+            ShowWindow(hwnd, SW_SHOW)
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+            print("Window visibility set up")
+            
+            # Periodically ensure window is visible
+            while self.focus_running:
+                # Just ensure the window is visible, don't force it to foreground
+                ShowWindow(hwnd, SW_SHOW)
+                
+                # Sleep to avoid excessive CPU usage
+                time.sleep(0.2)  # Check every 200ms
+        except Exception as e:
+            print(f"Error in window focus maintenance: {str(e)}")
+        
+        print("Window focus maintenance thread exiting")
+    
+    def start_render_thread(self):
+        """Start a dedicated thread for rendering frames"""
+        self.render_running = True
+        self.render_thread = threading.Thread(target=self.render_loop)
+        self.render_thread.daemon = True
+        self.render_thread.start()
+        print("Render thread started")
+    
+    def render_loop(self):
+        """Continuously render frames at a high rate regardless of UI focus"""
+        try:
+            while self.render_running:
+                if self.running and self.frame_buffer is not None:
+                    # Use tkinter's thread-safe after method to update UI
+                    self.root.after_idle(self.update_frame)
+                    
+                # Sleep briefly to avoid excessive CPU usage
+                # Short enough to maintain high frame rates
+                time.sleep(0.01)  # 10ms = potential for 100fps
+        except Exception as e:
+            print(f"Error in render loop: {str(e)}")
+        
+        print("Render thread exiting")
+    
     def on_closing(self):
         """Clean up resources when closing the application"""
         print("Closing application and cleaning up resources...")
         
-        # Set running flag to False first to stop any ongoing operations
-        self.running = False
+        # Stop focus maintenance thread
+        self.focus_running = False
+        if self.focus_thread:
+            self.focus_thread.join(timeout=1.0)
         
-        # Give a short time for threads to stop
-        time.sleep(0.1)
+        # Stop render thread
+        self.render_running = False
+        if self.render_thread:
+            self.render_thread.join(timeout=1.0)
+            
+        # Stop camera
+        self.cleanup_camera()
         
-        # Handle camera with extreme caution - both Stop and Close can hang
+        # Force quit the application
+        self._force_quit()
+    
+    def cleanup_camera(self):
+        """Clean up camera resources"""
         if self.hcam:
             camera_ref = self.hcam
             self.hcam = None  # Immediately set to None so we don't try to access it again
