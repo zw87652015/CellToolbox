@@ -16,22 +16,9 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 from tkinter import messagebox
 
-# Win32 constants for window management
-HWND_TOPMOST = -1
-HWND_NOTOPMOST = -2
-SWP_NOSIZE = 0x0001
-SWP_NOMOVE = 0x0002
+# Window management constants
 SW_SHOW = 5
-SWP_SHOWWINDOW = 0x0040
-
-# Win32 API functions
-SetWindowPos = ctypes.windll.user32.SetWindowPos
-ShowWindow = ctypes.windll.user32.ShowWindow
-BringWindowToTop = ctypes.windll.user32.BringWindowToTop
-AttachThreadInput = ctypes.windll.user32.AttachThreadInput
-GetForegroundWindow = ctypes.windll.user32.GetForegroundWindow
-GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
-GetCurrentThreadId = ctypes.windll.kernel32.GetCurrentThreadId
+SW_NORMAL = 1
 
 # Add the toupcam SDK path to the Python path
 sdk_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'toupcamsdk.20241216', 'python')
@@ -75,7 +62,7 @@ class ToupCamLiveControl:
         self.frame_height = 0
         self.running = False
         self.auto_exposure = True
-        self.exposure_time = 10000  # Default exposure time in microseconds
+        self.exposure_time = 8333  # Default exposure time in microseconds (8.333ms)
         self.gain = 100  # Default gain
         self.light_source = 0  # 0: DC, 1: 50Hz, 2: 60Hz
         self.binning_mode = 0x01  # Default: No binning
@@ -92,20 +79,12 @@ class ToupCamLiveControl:
         # UI update variables
         self.last_update_time = 0
         self.update_interval = 16  # milliseconds (60+ fps)
-        self.photo_image = None
         self.frame_count = 0
         self.fps = 0
         self.last_fps_time = time.time()
-        
-        # Window focus maintenance
-        self.focus_thread = None
-        self.focus_running = False
-        
-        # Rendering thread
-        self.render_thread = None
-        self.render_running = False
         self.new_frame_available = False
         self.frame_lock = threading.Lock()
+        self.render_running = False
         
         # Create UI
         self.create_ui()
@@ -113,11 +92,11 @@ class ToupCamLiveControl:
         # Start camera
         self.start_camera()
         
-        # Start window focus maintenance
-        self.start_focus_maintenance()
-        
         # Start rendering thread
         self.start_render_thread()
+        
+        # Make sure the window is visible
+        self.root.update()
     
     def load_binning_settings(self):
         """Load binning settings from file"""
@@ -194,9 +173,28 @@ class ToupCamLiveControl:
         self.video_frame = ttk.Frame(main_frame, borderwidth=2, relief="groove")
         self.video_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Video canvas with fixed size
-        self.canvas = tk.Canvas(self.video_frame, bg="black", width=800, height=600)
+        # Video canvas with fixed size and proper event handling
+        self.canvas = tk.Canvas(
+            self.video_frame, 
+            bg="black", 
+            width=800, 
+            height=600,
+            highlightthickness=0,  # Remove highlight border
+            takefocus=1  # Allow canvas to receive focus
+        )
         self.canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # Bind mouse events
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+        self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
+        self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
+        
+        # Make sure canvas can receive focus
+        self.canvas.focus_set()
+        
+        # Add a label to show click coordinates (for debugging)
+        self.coord_label = ttk.Label(self.video_frame, text="")
+        self.coord_label.pack(anchor=tk.NE, padx=5, pady=5)
         
         # FPS counter
         self.fps_label = ttk.Label(self.video_frame, text="FPS: 0")
@@ -259,7 +257,7 @@ class ToupCamLiveControl:
             self.hcam.put_HZ(2)
             
             # Set exposure time (in microseconds)
-            self.hcam.put_ExpoTime(16670)  # 16.67ms
+            self.hcam.put_ExpoTime(8333)  # 8.333ms
             
             # Set other camera options
             self.hcam.put_Brightness(0)
@@ -503,37 +501,7 @@ class ToupCamLiveControl:
             self.gain_scale.set(slider_value)
             self.gain_value.configure(text=str(self.gain))
     
-    def start_focus_maintenance(self):
-        """Start a thread to maintain window focus and ensure consistent frame updates"""
-        self.focus_running = True
-        self.focus_thread = threading.Thread(target=self.maintain_window_focus)
-        self.focus_thread.daemon = True
-        self.focus_thread.start()
-        print("Window focus maintenance thread started")
-    
-    def maintain_window_focus(self):
-        """Maintain window focus to ensure consistent frame updates"""
-        try:
-            # Get the window handle from Tkinter
-            hwnd = int(self.root.winfo_id())
-            print(f"Focus thread got window handle: {hwnd}")
-            
-            # Initial window setup - make it visible but not forcing foreground
-            ShowWindow(hwnd, SW_SHOW)
-            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
-            print("Window visibility set up")
-            
-            # Periodically ensure window is visible
-            while self.focus_running:
-                # Just ensure the window is visible, don't force it to foreground
-                ShowWindow(hwnd, SW_SHOW)
-                
-                # Sleep to avoid excessive CPU usage
-                time.sleep(0.2)  # Check every 200ms
-        except Exception as e:
-            print(f"Error in window focus maintenance: {str(e)}")
-        
-        print("Window focus maintenance thread exiting")
+
     
     def start_render_thread(self):
         """Start a dedicated thread for rendering frames"""
@@ -559,31 +527,43 @@ class ToupCamLiveControl:
         
         print("Render thread exiting")
     
+    def on_canvas_click(self, event):
+        """Handle mouse click on canvas"""
+        x, y = event.x, event.y
+        self.coord_label.config(text=f"Click at: ({x}, {y})")
+        self.canvas.focus_set()  # Ensure canvas has focus
+        
+    def on_canvas_release(self, event):
+        """Handle mouse release on canvas"""
+        pass  # Add any release handling if needed
+        
+    def on_canvas_drag(self, event):
+        """Handle mouse drag on canvas"""
+        x, y = event.x, event.y
+        self.coord_label.config(text=f"Drag to: ({x}, {y})")
+    
     def on_closing(self):
         """Clean up resources when closing the application"""
         print("Closing application and cleaning up resources...")
         
-        # Stop focus maintenance thread
-        self.focus_running = False
-        if self.focus_thread:
-            self.focus_thread.join(timeout=1.0)
-        
         # Stop render thread
         self.render_running = False
-        if self.render_thread:
+        if self.render_thread and self.render_thread.is_alive():
             self.render_thread.join(timeout=1.0)
-            
+        
         # Stop camera
         self.cleanup_camera()
         
-        # Force quit the application
-        self._force_quit()
+        # Force quit the application after a short delay
+        self.root.after(100, self._force_quit)
     
     def cleanup_camera(self):
         """Clean up camera resources"""
         if self.hcam:
+            print("Starting camera cleanup...")
             camera_ref = self.hcam
-            self.hcam = None  # Immediately set to None so we don't try to access it again
+            self.hcam = None  # Immediately set to None to prevent further access
+            self.running = False  # Stop any ongoing camera operations
             
             try:
                 # Create a thread to handle camera cleanup with timeout
@@ -602,26 +582,32 @@ class ToupCamLiveControl:
                             print("Camera closed successfully")
                         except Exception as e:
                             print(f"Error closing camera: {e}")
+                        
                     except Exception as e:
-                        print(f"Fatal error in camera cleanup: {e}")
+                        print(f"Error in camera cleanup thread: {e}")
                 
-                # Start camera cleanup in a separate thread
-                cleanup_thread = threading.Thread(target=cleanup_camera)
-                cleanup_thread.daemon = True  # Make thread a daemon so it won't block program exit
+                # Start and wait for cleanup thread with timeout
+                cleanup_thread = threading.Thread(target=cleanup_camera, daemon=True)
                 cleanup_thread.start()
                 
-                # Only wait a very short time - don't let it block the application exit
-                print("Waiting briefly for camera cleanup...")
-                cleanup_thread.join(timeout=0.5)  # Wait max 0.5 second for entire cleanup
+                # Only wait a short time - don't let it block the application exit
+                print("Waiting for camera cleanup...")
+                cleanup_thread.join(timeout=2.0)  # Wait up to 2 seconds for cleanup
                 
                 if cleanup_thread.is_alive():
                     print("WARNING: Camera cleanup timed out, abandoning camera resources")
+                else:
+                    print("Camera cleanup completed")
+                
             except Exception as e:
-                print(f"Error setting up camera cleanup: {e}")
+                print(f"Error during camera cleanup: {e}")
+            finally:
+                # Ensure we don't hold any references
+                camera_ref = None
         
         print("Shutting down application...")
-        # Use after_idle to ensure this runs in the main thread after current processing
-        self.root.after_idle(self._force_quit)
+        # Use after to ensure this runs in the main thread after current processing
+        self.root.after(100, self._force_quit)
     
     def _force_quit(self):
         """Force quit the application"""
