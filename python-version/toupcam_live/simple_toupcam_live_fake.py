@@ -1,68 +1,39 @@
 """
-Simple ToupCam Live Stream
-This script provides a basic live stream from a ToupCam camera using the same default exposure parameters
-as the full toupcam_live_control.py implementation.
+OBS Virtual Camera Live Stream
+This script provides a basic live stream from an OBS virtual camera using OpenCV,
+while maintaining the same cell detection functionality as the ToupCam implementation.
 """
 
 import sys
 import os
-import ctypes
 import time
 import threading
 import numpy as np
 import cv2
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
-from tkinter import messagebox
 from skimage import filters, morphology, measure, segmentation
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import json
 
-# Add the toupcam SDK path to the Python path
-sdk_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'toupcamsdk.20241216', 'python')
-sys.path.append(sdk_path)
-
-# Add the DLL directory to the PATH environment variable
-dll_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'toupcamsdk.20241216', 'win', 'x64')
-os.environ['PATH'] = dll_path + os.pathsep + os.environ['PATH']
-
-# Explicitly load the DLL using ctypes
-toupcam_dll_path = os.path.join(dll_path, 'toupcam.dll')
-if os.path.exists(toupcam_dll_path):
-    try:
-        toupcam_dll = ctypes.WinDLL(toupcam_dll_path)
-        print(f"Successfully loaded ToupCam DLL from: {toupcam_dll_path}")
-    except Exception as e:
-        print(f"Error loading ToupCam DLL: {e}")
-else:
-    print(f"ToupCam DLL not found at: {toupcam_dll_path}")
-
-try:
-    import toupcam
-    print(f"Successfully imported toupcam module from: {sdk_path}")
-except ImportError as e:
-    print(f"Error importing toupcam module: {e}")
-    print(f"Check if the path is correct: {sdk_path}")
-    sys.exit(1)
-
-class SimpleToupCamLive:
+class VirtualCameraLive:
     def __init__(self, root):
         self.root = root
-        self.root.title("Simple ToupCam Live Stream")
+        self.root.title("OBS Virtual Camera Live Stream")
         self.root.geometry("1200x800")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Camera variables
-        self.hcam = None
-        self.cam_buffer = None
+        self.cap = None
         self.frame_buffer = None
         self.frame_width = 0
         self.frame_height = 0
         self.running = False
         
-        # Default exposure parameters (same as in toupcam_live_control.py)
-        self.exposure_time = 8333  # 8.333ms in microseconds
+        # Camera settings
+        self.camera_index = 0  # Default camera index (usually 0 for first camera)
         
         # UI update variables
         self.frame_count = 0
@@ -204,6 +175,219 @@ class SimpleToupCamLive:
         self.cell_count_var = tk.StringVar(value="Cells: 0")
         ttk.Label(cell_frame, textvariable=self.cell_count_var).pack(anchor=tk.W, padx=5, pady=5)
         
+        # Parameter controls
+        param_notebook = ttk.Notebook(cell_frame)
+        param_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # CLAHE parameters tab
+        clahe_frame = ttk.Frame(param_notebook)
+        param_notebook.add(clahe_frame, text="CLAHE")
+        
+        # CLAHE Clip Limit
+        ttk.Label(clahe_frame, text="Clip Limit:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.clahe_clip_var = tk.DoubleVar(value=2.5)
+        clahe_clip_scale = ttk.Scale(
+            clahe_frame,
+            from_=1.0,
+            to=5.0,
+            orient=tk.HORIZONTAL,
+            variable=self.clahe_clip_var,
+            command=self.update_clahe_clip
+        )
+        clahe_clip_scale.pack(fill=tk.X, padx=5, pady=(0,5))
+        self.clahe_clip_value_label = ttk.Label(clahe_frame, text="2.5")
+        self.clahe_clip_value_label.pack(anchor=tk.E, padx=5)
+        
+        # CLAHE Tile Size
+        ttk.Label(clahe_frame, text="Tile Size:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.clahe_tile_var = tk.IntVar(value=10)
+        clahe_tile_scale = ttk.Scale(
+            clahe_frame,
+            from_=2,
+            to=20,
+            orient=tk.HORIZONTAL,
+            variable=self.clahe_tile_var,
+            command=self.update_clahe_tile
+        )
+        clahe_tile_scale.pack(fill=tk.X, padx=5, pady=(0,5))
+        self.clahe_tile_value_label = ttk.Label(clahe_frame, text="10")
+        self.clahe_tile_value_label.pack(anchor=tk.E, padx=5)
+        
+        # Edge detection parameters tab
+        edge_frame = ttk.Frame(param_notebook)
+        param_notebook.add(edge_frame, text="Edge")
+        
+        # Canny Low Threshold
+        ttk.Label(edge_frame, text="Canny Low:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.canny_low_var = tk.IntVar(value=30)
+        canny_low_scale = ttk.Scale(
+            edge_frame,
+            from_=10,
+            to=100,
+            orient=tk.HORIZONTAL,
+            variable=self.canny_low_var,
+            command=self.update_canny_low
+        )
+        canny_low_scale.pack(fill=tk.X, padx=5, pady=(0,5))
+        self.canny_low_value_label = ttk.Label(edge_frame, text="30")
+        self.canny_low_value_label.pack(anchor=tk.E, padx=5)
+        
+        # Canny High Threshold
+        ttk.Label(edge_frame, text="Canny High:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.canny_high_var = tk.IntVar(value=150)
+        canny_high_scale = ttk.Scale(
+            edge_frame,
+            from_=50,
+            to=300,
+            orient=tk.HORIZONTAL,
+            variable=self.canny_high_var,
+            command=self.update_canny_high
+        )
+        canny_high_scale.pack(fill=tk.X, padx=5, pady=(0,5))
+        self.canny_high_value_label = ttk.Label(edge_frame, text="150")
+        self.canny_high_value_label.pack(anchor=tk.E, padx=5)
+        
+        # Edge Threshold
+        ttk.Label(edge_frame, text="Edge Threshold:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        self.edge_threshold_var = tk.IntVar(value=30)
+        edge_threshold_scale = ttk.Scale(
+            edge_frame,
+            from_=10,
+            to=100,
+            orient=tk.HORIZONTAL,
+            variable=self.edge_threshold_var,
+            command=self.update_edge_threshold
+        )
+        edge_threshold_scale.pack(fill=tk.X, padx=5, pady=(0,5))
+        self.edge_threshold_value_label = ttk.Label(edge_frame, text="30")
+        self.edge_threshold_value_label.pack(anchor=tk.E, padx=5)
+        
+        # Cell filtering parameters tab
+        filter_frame = ttk.Frame(param_notebook)
+        param_notebook.add(filter_frame, text="Filter")
+        
+        # Area Range
+        ttk.Label(filter_frame, text="Area Range:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        area_frame = ttk.Frame(filter_frame)
+        area_frame.pack(fill=tk.X, padx=5, pady=(0,5))
+        
+        self.min_area_var = tk.IntVar(value=100)
+        min_area_scale = ttk.Scale(
+            area_frame,
+            from_=50,
+            to=500,
+            orient=tk.HORIZONTAL,
+            variable=self.min_area_var,
+            command=self.update_min_area
+        )
+        min_area_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,2))
+        
+        self.max_area_var = tk.IntVar(value=8000)
+        max_area_scale = ttk.Scale(
+            area_frame,
+            from_=1000,
+            to=15000,
+            orient=tk.HORIZONTAL,
+            variable=self.max_area_var,
+            command=self.update_max_area
+        )
+        max_area_scale.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(2,0))
+        
+        area_value_frame = ttk.Frame(filter_frame)
+        area_value_frame.pack(fill=tk.X, padx=5)
+        self.min_area_value_label = ttk.Label(area_value_frame, text="100")
+        self.min_area_value_label.pack(side=tk.LEFT)
+        self.max_area_value_label = ttk.Label(area_value_frame, text="8000")
+        self.max_area_value_label.pack(side=tk.RIGHT)
+        
+        # Perimeter Range
+        ttk.Label(filter_frame, text="Perimeter Range:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        perimeter_frame = ttk.Frame(filter_frame)
+        perimeter_frame.pack(fill=tk.X, padx=5, pady=(0,5))
+        
+        self.min_perimeter_var = tk.IntVar(value=30)
+        min_perimeter_scale = ttk.Scale(
+            perimeter_frame,
+            from_=10,
+            to=100,
+            orient=tk.HORIZONTAL,
+            variable=self.min_perimeter_var,
+            command=self.update_min_perimeter
+        )
+        min_perimeter_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,2))
+        
+        self.max_perimeter_var = tk.IntVar(value=800)
+        max_perimeter_scale = ttk.Scale(
+            perimeter_frame,
+            from_=200,
+            to=1500,
+            orient=tk.HORIZONTAL,
+            variable=self.max_perimeter_var,
+            command=self.update_max_perimeter
+        )
+        max_perimeter_scale.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(2,0))
+        
+        perimeter_value_frame = ttk.Frame(filter_frame)
+        perimeter_value_frame.pack(fill=tk.X, padx=5)
+        self.min_perimeter_value_label = ttk.Label(perimeter_value_frame, text="30")
+        self.min_perimeter_value_label.pack(side=tk.LEFT)
+        self.max_perimeter_value_label = ttk.Label(perimeter_value_frame, text="800")
+        self.max_perimeter_value_label.pack(side=tk.RIGHT)
+        
+        # Circularity Range
+        ttk.Label(filter_frame, text="Circularity Range:").pack(anchor=tk.W, padx=5, pady=(5,0))
+        circularity_frame = ttk.Frame(filter_frame)
+        circularity_frame.pack(fill=tk.X, padx=5, pady=(0,5))
+        
+        self.min_circularity_var = tk.DoubleVar(value=0.8)
+        min_circularity_scale = ttk.Scale(
+            circularity_frame,
+            from_=0.5,
+            to=2.0,
+            orient=tk.HORIZONTAL,
+            variable=self.min_circularity_var,
+            command=self.update_min_circularity
+        )
+        min_circularity_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,2))
+        
+        self.max_circularity_var = tk.DoubleVar(value=12.0)
+        max_circularity_scale = ttk.Scale(
+            circularity_frame,
+            from_=5.0,
+            to=20.0,
+            orient=tk.HORIZONTAL,
+            variable=self.max_circularity_var,
+            command=self.update_max_circularity
+        )
+        max_circularity_scale.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(2,0))
+        
+        circularity_value_frame = ttk.Frame(filter_frame)
+        circularity_value_frame.pack(fill=tk.X, padx=5)
+        self.min_circularity_value_label = ttk.Label(circularity_value_frame, text="0.8")
+        self.min_circularity_value_label.pack(side=tk.LEFT)
+        self.max_circularity_value_label = ttk.Label(circularity_value_frame, text="12.0")
+        self.max_circularity_value_label.pack(side=tk.RIGHT)
+        
+        # Parameter load/save buttons
+        param_buttons_frame = ttk.Frame(cell_frame)
+        param_buttons_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Apply button for all parameters
+        self.apply_params_button = ttk.Button(
+            param_buttons_frame,
+            text="Apply Parameters",
+            command=self.apply_detection_parameters
+        )
+        self.apply_params_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,2))
+        
+        # Load parameters button
+        self.load_params_button = ttk.Button(
+            param_buttons_frame,
+            text="Load Parameters",
+            command=self.load_parameters
+        )
+        self.load_params_button.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(2,0))
+        
         # Detection results frame
         results_frame = ttk.LabelFrame(control_frame, text="Detection Results")
         results_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -223,113 +407,78 @@ class SimpleToupCamLive:
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
     
     def start_camera(self):
-        """Initialize and start the camera with default exposure parameters"""
-        devices = toupcam.Toupcam.EnumV2()
-        if not devices:
-            self.status_var.set("No camera found")
-            messagebox.showerror(
-                "Camera Error", 
-                "No ToupCam cameras found. Please connect a camera and restart the application."
-            )
-            return
-        
-        device = devices[0]  # Use the first camera
-        
+        """Initialize and start the OBS virtual camera using OpenCV"""
         try:
-            # Open the camera
-            self.hcam = toupcam.Toupcam.Open(None)
-            if not self.hcam:
-                self.status_var.set("Failed to open camera")
-                return
+            # Try to open the camera (usually 0 for default camera)
+            # For OBS virtual camera, this should be one of the available camera indices
+            self.cap = cv2.VideoCapture(self.camera_index)
+            
+            # Check if camera opened successfully
+            if not self.cap.isOpened():
+                # Try a few more indices if the first one fails
+                for i in range(1, 5):
+                    self.cap = cv2.VideoCapture(i)
+                    if self.cap.isOpened():
+                        self.camera_index = i
+                        break
+                
+                if not self.cap.isOpened():
+                    self.status_var.set("Failed to open camera")
+                    messagebox.showerror(
+                        "Camera Error", 
+                        "No camera found. Please start OBS Virtual Camera and restart the application."
+                    )
+                    return
             
             # Get camera properties
-            self.frame_width, self.frame_height = self.hcam.get_Size()
+            self.frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             print(f"Camera resolution: {self.frame_width}x{self.frame_height}")
-            
-            # Set camera properties for optimal performance
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BYTEORDER, 0)  # RGB
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_UPSIDE_DOWN, 0)  # Normal orientation
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_FRAME_DEQUE_LENGTH, 2)  # Minimize frame queue
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_CALLBACK_THREAD, 1)  # Enable dedicated callback thread
-            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_THREAD_PRIORITY, 2)  # Set high thread priority
-            
-            # Disable auto exposure
-            self.hcam.put_AutoExpoEnable(False)
-            
-            # Set anti-flicker to 60Hz (for 16.67ms exposure)
-            self.hcam.put_HZ(2)  # 2 = 60Hz
-            
-            # Set exposure time (in microseconds)
-            self.hcam.put_ExpoTime(self.exposure_time)  # 8.333ms
-            
-            # Set other camera options
-            self.hcam.put_Brightness(0)
-            self.hcam.put_Contrast(0)
-            self.hcam.put_Gamma(100)  # 1.0
-            
-            # Allocate buffer for image data
-            buffer_size = toupcam.TDIBWIDTHBYTES(self.frame_width * 24) * self.frame_height
-            self.cam_buffer = bytes(buffer_size)
-            
-            # Pre-allocate numpy array for frame buffer to avoid memory allocations
-            self.frame_buffer_shape = (self.frame_height, toupcam.TDIBWIDTHBYTES(self.frame_width * 24) // 3, 3)
-            
-            # Register callback
-            self.hcam.StartPullModeWithCallback(self.on_frame, self)
             
             # Set running flag to True to enable image processing
             self.running = True
             
-            self.status_var.set(f"Camera started: {device.displayname}")
+            # Start the frame capture thread
+            self.capture_thread = threading.Thread(target=self.capture_frames)
+            self.capture_thread.daemon = True
+            self.capture_thread.start()
             
+            self.status_var.set(f"Camera started: OBS Virtual Camera ({self.frame_width}x{self.frame_height})")
         except Exception as e:
             self.status_var.set(f"Error starting camera: {str(e)}")
             messagebox.showerror("Camera Error", f"Error starting camera: {str(e)}")
     
-    def on_frame(self, nEvent, ctx):
-        """Camera event callback function"""
-        try:
-            if nEvent == toupcam.TOUPCAM_EVENT_IMAGE:
-                ctx.process_image()
-            elif nEvent == toupcam.TOUPCAM_EVENT_DISCONNECTED:
-                ctx.status_var.set("Camera disconnected")
-        except Exception as e:
-            print(f"[ERROR] Exception in on_frame: {e}")
-    
-    def process_image(self):
-        """Process the image from the camera"""
-        if not self.running or not self.hcam:
-            return
-            
-        # Track frame timing for FPS calculation
-        current_time = time.time()
-            
-        try:
-            # Pull the image from the camera
-            self.hcam.PullImageV4(self.cam_buffer, 0, 24, 0, None)
-            
-            # Convert the raw buffer to a numpy array
-            frame = np.frombuffer(self.cam_buffer, dtype=np.uint8).reshape(self.frame_buffer_shape)
-            frame = frame[:, :self.frame_width, :]
-            
-            # Store the frame
-            with self.frame_lock:
-                self.frame_buffer = frame
-                self.new_frame_available = True
-            
-            # Count frames for FPS calculation
-            self.frame_count += 1
-            if current_time - self.last_fps_time >= 1.0:
-                self.fps = self.frame_count / (current_time - self.last_fps_time)
-                self.fps_label.configure(text=f"FPS: {self.fps:.1f}")
-                self.status_var.set(f"Camera running: {self.fps:.1f} FPS")
-                self.frame_count = 0
-                self.last_fps_time = current_time
+    def capture_frames(self):
+        """Continuously capture frames from the camera in a separate thread"""
+        while self.running:
+            try:
+                # Read a frame from the camera
+                ret, frame = self.cap.read()
                 
-        except toupcam.HRESULTException as ex:
-            print(f"[ERROR] Error pulling image: 0x{ex.hr & 0xffffffff:x}")
-        except Exception as e:
-            print(f"[ERROR] process_image exception: {e}")
+                if ret:
+                    # Store the frame
+                    with self.frame_lock:
+                        self.frame_buffer = frame
+                        self.new_frame_available = True
+                    
+                    # Track frame timing for FPS calculation
+                    current_time = time.time()
+                    self.frame_count += 1
+                    if current_time - self.last_fps_time >= 1.0:
+                        self.fps = self.frame_count / (current_time - self.last_fps_time)
+                        self.fps_label.configure(text=f"FPS: {self.fps:.1f}")
+                        self.status_var.set(f"Camera running: {self.fps:.1f} FPS")
+                        self.frame_count = 0
+                        self.last_fps_time = current_time
+                else:
+                    print("[ERROR] Failed to read frame from camera")
+                    time.sleep(0.01)  # Short sleep to prevent CPU overload
+                    
+            except Exception as e:
+                print(f"[ERROR] Exception in capture_frames: {e}")
+                time.sleep(0.1)  # Sleep on error to prevent rapid error loops
+    
+    # The process_image method is no longer needed as we're handling frames in capture_frames
     
     def update_frame(self):
         """Update the UI with the latest frame"""
@@ -380,19 +529,37 @@ class SimpleToupCamLive:
                 if self.cell_detection_active and hasattr(self, 'detected_cells') and self.detected_cells:
                     # Draw bounding boxes for detected cells
                     for cell in self.detected_cells:
+                        # Get the original coordinates
                         bbox = cell['bbox']
                         y1_cell, x1_cell, y2_cell, x2_cell = bbox
                         
-                        # Draw rectangle
-                        cv2.rectangle(display_frame, (x1_cell, y1_cell), (x2_cell, y2_cell), (255, 0, 0), 2)
+                        # Scale coordinates to display size
+                        # Convert [y1, x1, y2, x2] to [x1, y1, x2, y2] for scaling
+                        orig_coords = [x1_cell, y1_cell, x2_cell, y2_cell]
+                        scaled_coords = self.scale_coords_to_display(orig_coords)
+                        
+                        # Extract scaled coordinates
+                        display_x1, display_y1, display_x2, display_y2 = scaled_coords
+                        
+                        # Draw rectangle with scaled coordinates
+                        cv2.rectangle(display_frame, 
+                                     (display_x1, display_y1), 
+                                     (display_x2, display_y2), 
+                                     (255, 0, 0), 2)
+                        
+                        # Scale centroid coordinates
+                        centroid = cell['centroid']
+                        # Centroid is (y, x) format, convert to (x, y) for scaling
+                        centroid_coords = [centroid[1], centroid[0]]
+                        scaled_centroid = self.scale_coords_to_display(centroid_coords)
                         
                         # Add text with cell properties (simplified for main display)
                         text = f"A:{cell['area']:.0f}"
-                        centroid = cell['centroid']
                         
-                        # Place text at the centroid
-                        cv2.putText(display_frame, text, (int(centroid[1]), int(centroid[0])), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                        # Place text at the scaled centroid
+                        cv2.putText(display_frame, text, 
+                                   (scaled_centroid[0], scaled_centroid[1]), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
             
             # Convert to PhotoImage
             img = Image.fromarray(display_frame)
@@ -437,28 +604,25 @@ class SimpleToupCamLive:
                 # Sleep briefly to avoid excessive CPU usage
                 time.sleep(0.01)  # 10ms = potential for 100fps
         except Exception as e:
-            print(f"Error in render loop: {str(e)}")
-        
-        print("Render thread exiting")
-    
+            print(f"[ERROR] Exception in capture_frames: {e}")
+            time.sleep(0.1)  # Sleep on error to prevent rapid error loops
+
     def on_closing(self):
-        """Clean up resources when closing the application"""
-        print("Closing application and cleaning up resources...")
+        """Clean up resources when the application is closed"""
+        self.running = False
         
         # Stop cell detection if active
         if self.cell_detection_active:
-            self.cell_detection_active = False
-            if hasattr(self, 'cell_detection_thread') and self.cell_detection_thread and self.cell_detection_thread.is_alive():
-                self.cell_detection_thread.join(timeout=1.0)
-                print("Cell detection thread stopped")
+            self.stop_cell_detection()
         
-        # Stop render thread
+        # Stop rendering
         self.render_running = False
-        if hasattr(self, 'render_thread') and self.render_thread.is_alive():
-            self.render_thread.join(timeout=1.0)
         
-        # Stop camera
-        self.cleanup_camera()
+        # Close the camera
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+            self.cap = None
+            print("Camera released successfully")
         
         # Force quit the application after a short delay
         self.root.after(100, self._force_quit)
@@ -477,50 +641,21 @@ class SimpleToupCamLive:
             except Exception as e:
                 print(f"Error during destroy: {e}")
     
-    def cleanup_camera(self):
-        """Clean up camera resources with timeout protection"""
-        if self.hcam:
-            print("Starting camera cleanup...")
-            camera_ref = self.hcam
-            self.hcam = None  # Immediately set to None to prevent further access
-            self.running = False  # Stop any ongoing camera operations
-            
-            try:
-                # Create a thread to handle camera cleanup with timeout
-                def cleanup_camera_thread():
-                    try:
-                        print("Attempting to stop camera...")
-                        try:
-                            camera_ref.Stop()
-                            print("Camera stopped successfully")
-                        except Exception as e:
-                            print(f"Error stopping camera: {e}")
-                        
-                        print("Attempting to close camera...")
-                        try:
-                            camera_ref.Close()
-                            print("Camera closed successfully")
-                        except Exception as e:
-                            print(f"Error closing camera: {e}")
-                        
-                    except Exception as e:
-                        print(f"Error in camera cleanup thread: {e}")
-                
-                # Start and wait for cleanup thread with timeout
-                cleanup_thread = threading.Thread(target=cleanup_camera_thread, daemon=True)
-                cleanup_thread.start()
-                
-                # Only wait a short time - don't let it block the application exit
-                print("Waiting for camera cleanup...")
-                cleanup_thread.join(timeout=1.0)  # Wait up to 1 second for cleanup
-                
-                if cleanup_thread.is_alive():
-                    print("WARNING: Camera cleanup timed out, abandoning camera resources")
-                else:
-                    print("Camera cleanup completed")
-                    
-            except Exception as e:
-                print(f"Error during camera cleanup: {e}")
+    def start_cell_detection(self):
+        """Start cell detection processing"""
+        if not self.cell_detection_active:
+            self.cell_detection_active = True
+            self.start_detection_button.config(state=tk.DISABLED)
+            self.stop_detection_button.config(state=tk.NORMAL)
+            self.status_var.set("Cell detection started")
+    
+    def stop_cell_detection(self):
+        """Stop cell detection processing"""
+        if self.cell_detection_active:
+            self.cell_detection_active = False
+            self.start_detection_button.config(state=tk.NORMAL)
+            self.stop_detection_button.config(state=tk.DISABLED)
+            self.status_var.set("Cell detection stopped")
     
     def toggle_aoi_drawing(self):
         """Toggle AOI drawing mode"""
@@ -546,21 +681,315 @@ class SimpleToupCamLive:
         self.aoi_coords = [0, 0, 0, 0]
         self.status_var.set("AOI cleared")
     
+    def update_aoi_overlay(self, value=None):
+        """Update the AOI overlay opacity"""
+        # This function is called when the opacity slider is changed
+        # We don't need to do anything here except force a redraw
+        # The actual opacity is applied during the render process
+        # Just set a flag to indicate the frame needs to be updated
+        self.new_frame_available = True
+    
     def get_adjusted_aoi_coords(self):
         """Return AOI coordinates adjusted to ensure x1<x2 and y1<y2"""
         x1, y1, x2, y2 = self.aoi_coords
+        
         # Ensure x1 < x2 and y1 < y2
         if x1 > x2:
             x1, x2 = x2, x1
         if y1 > y2:
             y1, y2 = y2, y1
+            
         return [x1, y1, x2, y2]
+    
+    def scale_aoi_to_original(self, aoi_coords):
+        """Scale AOI coordinates from display size to original image size"""
+        x1, y1, x2, y2 = aoi_coords
+        
+        # Get original frame dimensions
+        if self.frame_buffer is not None:
+            orig_height, orig_width = self.frame_buffer.shape[:2]
+        else:
+            # Default to camera resolution if frame buffer is not available
+            orig_width, orig_height = 640, 480  # Default camera resolution
+        
+        # Get display dimensions
+        display_width = self.display_width
+        display_height = self.display_height
+        
+        # Calculate scale factors
+        scale_x = orig_width / display_width
+        scale_y = orig_height / display_height
+        
+        # Scale coordinates
+        scaled_x1 = int(x1 * scale_x)
+        scaled_y1 = int(y1 * scale_y)
+        scaled_x2 = int(x2 * scale_x)
+        scaled_y2 = int(y2 * scale_y)
+        
+        # Ensure coordinates are within bounds
+        scaled_x1 = max(0, min(scaled_x1, orig_width - 1))
+        scaled_y1 = max(0, min(scaled_y1, orig_height - 1))
+        scaled_x2 = max(0, min(scaled_x2, orig_width - 1))
+        scaled_y2 = max(0, min(scaled_y2, orig_height - 1))
+        
+        return [scaled_x1, scaled_y1, scaled_x2, scaled_y2]
+    
+    def scale_coords_to_display(self, coords):
+        """Scale coordinates from original image size to display size"""
+        # Get original frame dimensions
+        if self.frame_buffer is not None:
+            orig_height, orig_width = self.frame_buffer.shape[:2]
+        else:
+            # Default to camera resolution if frame buffer is not available
+            orig_width, orig_height = 640, 480  # Default camera resolution
+        
+        # Get display dimensions
+        display_width = self.display_width
+        display_height = self.display_height
+        
+        # Calculate scale factors
+        scale_x = display_width / orig_width
+        scale_y = display_height / orig_height
+        
+        # Scale the coordinates
+        scaled_coords = []
+        for i in range(0, len(coords), 2):
+            if i+1 < len(coords):
+                x = int(coords[i] * scale_x)
+                y = int(coords[i+1] * scale_y)
+                scaled_coords.extend([x, y])
+        
+        return scaled_coords
     
     def update_aoi_overlay(self, *args):
         """Update the AOI overlay based on opacity slider"""
         # Force a frame update to refresh the overlay
         if hasattr(self, 'aoi_coords') and all(coord != 0 for coord in self.aoi_coords):
             self.update_frame()
+    
+    def update_clahe_clip(self, value):
+        """Update CLAHE clip limit value"""
+        value = float(value)
+        self.clahe_clip_value_label.config(text=f"{value:.1f}")
+    
+    def update_clahe_tile(self, value):
+        """Update CLAHE tile size value"""
+        value = int(float(value))
+        self.clahe_tile_value_label.config(text=str(value))
+    
+    def update_canny_low(self, value):
+        """Update Canny low threshold value"""
+        value = int(float(value))
+        self.canny_low_value_label.config(text=str(value))
+    
+    def update_canny_high(self, value):
+        """Update Canny high threshold value"""
+        value = int(float(value))
+        self.canny_high_value_label.config(text=str(value))
+    
+    def update_edge_threshold(self, value):
+        """Update edge threshold value"""
+        value = int(float(value))
+        self.edge_threshold_value_label.config(text=str(value))
+    
+    def update_min_area(self, value):
+        """Update minimum area value"""
+        value = int(float(value))
+        self.min_area_value_label.config(text=str(value))
+    
+    def update_max_area(self, value):
+        """Update maximum area value"""
+        value = int(float(value))
+        self.max_area_value_label.config(text=str(value))
+    
+    def update_min_perimeter(self, value):
+        """Update minimum perimeter value"""
+        value = int(float(value))
+        self.min_perimeter_value_label.config(text=str(value))
+    
+    def update_max_perimeter(self, value):
+        """Update maximum perimeter value"""
+        value = int(float(value))
+        self.max_perimeter_value_label.config(text=str(value))
+    
+    def update_min_circularity(self, value):
+        """Update minimum circularity value"""
+        value = float(value)
+        self.min_circularity_value_label.config(text=f"{value:.1f}")
+    
+    def update_max_circularity(self, value):
+        """Update maximum circularity value"""
+        value = float(value)
+        self.max_circularity_value_label.config(text=f"{value:.1f}")
+    
+    def load_parameters(self):
+        """Load parameters from a JSON file"""
+        # Schedule this function to run after a short delay to ensure UI is responsive
+        self.root.after(10, self._load_parameters_impl)
+    
+    def _load_parameters_impl(self):
+        """Implementation of parameter loading with proper thread handling"""
+        # Temporarily pause the camera processing to prevent freezing
+        was_detection_active = self.cell_detection_active
+        if was_detection_active:
+            self.stop_cell_detection()
+        
+        # Temporarily stop the render thread to free up resources
+        was_rendering = self.render_running
+        if was_rendering:
+            self.render_running = False
+            time.sleep(0.1)  # Give the render thread time to stop
+        
+        try:
+            # Look for parameters directory in the parent directory
+            parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            params_dir = os.path.join(parent_dir, "parameters")
+            
+            # If parameters directory doesn't exist, use the current directory
+            if not os.path.exists(params_dir):
+                params_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Update status before opening dialog
+            self.status_var.set("Opening file dialog...")
+            
+            # Process all pending events to ensure UI is updated
+            self.root.update_idletasks()
+            self.root.update()
+            
+            # Open file dialog to select parameter file
+            file_path = filedialog.askopenfilename(
+                title="Load Parameters",
+                initialdir=params_dir,
+                filetypes=[("JSON files", "*.json")],
+                parent=self.root
+            )
+            
+            if not file_path:
+                self.status_var.set("Parameter loading canceled")
+                # Restart render thread if it was active
+                if was_rendering:
+                    self.render_running = True
+                # Resume cell detection if it was active before
+                if was_detection_active:
+                    self.start_cell_detection()
+                return
+                
+            # Load parameters from file
+            with open(file_path, 'r') as f:
+                params = json.load(f)
+                
+            # Update UI controls with loaded parameters
+            self.update_ui_from_params(params)
+            
+            # Apply the loaded parameters
+            self.apply_detection_parameters()
+            
+            # Update status
+            self.status_var.set(f"Parameters loaded from {os.path.basename(file_path)}")
+            
+            # Restart render thread if it was active
+            if was_rendering:
+                self.render_running = True
+            
+            # Resume cell detection if it was active before
+            if was_detection_active:
+                self.start_cell_detection()
+            
+        except Exception as e:
+            self.status_var.set(f"Error loading parameters: {str(e)}")
+            messagebox.showerror("Error", f"Failed to load parameters: {str(e)}")
+            
+            # Restart render thread if it was active
+            if was_rendering:
+                self.render_running = True
+                
+            # Resume cell detection if it was active before
+            if was_detection_active:
+                self.start_cell_detection()
+    
+    def update_ui_from_params(self, params):
+        """Update UI controls based on loaded parameters"""
+        # Map parameter names to UI variables and update functions
+        param_mapping = {
+            'clahe_clip_limit': (self.clahe_clip_var, self.update_clahe_clip),
+            'clahe_tile_size': (self.clahe_tile_var, self.update_clahe_tile),
+            'min_object_size': None,  # Not directly exposed in UI
+            'eccentricity_threshold': None,  # Not directly exposed in UI
+            'area_threshold_small': None,  # Not directly exposed in UI
+            'area_threshold_large': None,  # Not directly exposed in UI
+            'area_min': (self.min_area_var, self.update_min_area),
+            'area_max': (self.max_area_var, self.update_max_area),
+            'perimeter_min': (self.min_perimeter_var, self.update_min_perimeter),
+            'perimeter_max': (self.max_perimeter_var, self.update_max_perimeter),
+            'circularity_min': (self.min_circularity_var, self.update_min_circularity),
+            'circularity_max': (self.max_circularity_var, self.update_max_circularity),
+            'aspect_ratio_threshold': None  # Not directly exposed in UI
+        }
+        
+        # Additional mappings for parameters with different names
+        additional_mappings = {
+            'canny_low': (self.canny_low_var, self.update_canny_low),
+            'canny_high': (self.canny_high_var, self.update_canny_high),
+            'edge_threshold': (self.edge_threshold_var, self.update_edge_threshold)
+        }
+        
+        # Update UI controls based on loaded parameters
+        for param_name, value in params.items():
+            # Check if parameter exists in main mapping
+            if param_name in param_mapping and param_mapping[param_name] is not None:
+                var, update_func = param_mapping[param_name]
+                var.set(value)
+                update_func(value)
+            # Check additional mappings
+            elif param_name in additional_mappings:
+                var, update_func = additional_mappings[param_name]
+                var.set(value)
+                update_func(value)
+            
+        # Update cell detector parameters that are not directly exposed in UI
+        # These parameters will be used in the cell detection process
+        if 'min_object_size' in params:
+            self.cell_detector.min_object_size = params['min_object_size']
+        if 'eccentricity_threshold' in params:
+            self.cell_detector.eccentricity_threshold = params['eccentricity_threshold']
+        if 'area_threshold_small' in params:
+            self.cell_detector.area_threshold_small = params['area_threshold_small']
+        if 'area_threshold_large' in params:
+            self.cell_detector.area_threshold_large = params['area_threshold_large']
+        if 'aspect_ratio_threshold' in params:
+            self.cell_detector.aspect_ratio_threshold = params['aspect_ratio_threshold']
+    
+    def apply_detection_parameters(self):
+        """Apply all detection parameters to the cell detector"""
+        # Update CLAHE parameters
+        self.cell_detector.clahe_clip_limit = self.clahe_clip_var.get()
+        self.cell_detector.clahe_tile_size = self.clahe_tile_var.get()
+        
+        # Update edge detection parameters
+        self.cell_detector.canny_low = self.canny_low_var.get()
+        self.cell_detector.canny_high = self.canny_high_var.get()
+        self.cell_detector.edge_threshold = self.edge_threshold_var.get()
+        
+        # Update cell filtering parameters
+        self.cell_detector.min_area = self.min_area_var.get()
+        self.cell_detector.max_area = self.max_area_var.get()
+        self.cell_detector.min_perimeter = self.min_perimeter_var.get()
+        self.cell_detector.max_perimeter = self.max_perimeter_var.get()
+        self.cell_detector.min_circularity = self.min_circularity_var.get()
+        self.cell_detector.max_circularity = self.max_circularity_var.get()
+        
+        # Update morphology parameters
+        self.cell_detector.min_object_size = 15  # Default value from parameter_visualization_ui.py
+        
+        # Update additional parameters from parameter_visualization_ui.py
+        # These values will be overridden if they are in the loaded parameter file
+        self.cell_detector.eccentricity_threshold = 0.98
+        self.cell_detector.area_threshold_small = 200
+        self.cell_detector.area_threshold_large = 400
+        self.cell_detector.aspect_ratio_threshold = 1.5
+        
+        # Update status
+        self.status_var.set("Detection parameters applied")
     
     def start_cell_detection(self):
         """Start the cell detection process"""
@@ -573,6 +1002,9 @@ class SimpleToupCamLive:
         if not self.running or self.frame_buffer is None:
             messagebox.showwarning("Camera Not Running", "Camera must be running to detect cells.")
             return
+        
+        # Apply current parameters to the cell detector
+        self.apply_detection_parameters()
         
         # Update UI
         self.start_detection_button.config(state=tk.DISABLED)
@@ -619,10 +1051,13 @@ class SimpleToupCamLive:
                             continue
                     
                     # Get the adjusted AOI coordinates
-                    aoi_coords = self.get_adjusted_aoi_coords()
+                    display_aoi_coords = self.get_adjusted_aoi_coords()
+                    
+                    # Scale AOI coordinates to match the original image resolution
+                    scaled_aoi_coords = self.scale_aoi_to_original(display_aoi_coords)
                     
                     # Detect cells in the AOI
-                    self.detected_cells, result_image = self.cell_detector.detect_cells(frame, aoi_coords)
+                    self.detected_cells, result_image = self.cell_detector.detect_cells(frame, scaled_aoi_coords)
                     
                     # Update the cell count display
                     self.cell_count_var.set(f"Cells: {len(self.detected_cells)}")
@@ -865,9 +1300,33 @@ class SimpleToupCamLive:
 class CellDetector:
     """Cell detection class for processing images and detecting cells"""
     def __init__(self):
-        # Parameters for cell detection
+        # Parameters for cell detection (aligned with parameter_visualization_ui.py)
         self.clahe_clip_limit = 2.5
         self.clahe_tile_size = 10
+        
+        # Edge detection parameters
+        self.canny_low = 30
+        self.canny_high = 150
+        self.edge_threshold = 30
+        
+        # Cell filtering parameters (aligned with parameter_visualization_ui.py)
+        self.min_area = 200  # Updated from 100 to 200
+        self.max_area = 3000  # Updated from 8000 to 3000
+        self.min_perimeter = 300
+        self.max_perimeter = 800
+        self.min_circularity = 0.8
+        self.max_circularity = 12.0
+        
+        # Additional parameters from parameter_visualization_ui.py
+        self.min_object_size = 15
+        self.eccentricity_threshold = 0.98
+        self.area_threshold_small = 200
+        self.area_threshold_large = 400
+        self.aspect_ratio_threshold = 1.5
+        
+        # Morphology parameters
+        self.final_min_size = 100
+        
         self.detected_cells = []
         self.processing = False
     
@@ -921,7 +1380,7 @@ class CellDetector:
         
         # Edge detection
         img_8bit = (denoised_image * 255).astype(np.uint8)
-        edge_canny = cv2.Canny(img_8bit, 30, 150)
+        edge_canny = cv2.Canny(img_8bit, self.canny_low, self.canny_high)
         
         # Prewitt edge detection
         kernelx = np.array([[-1, 0, 1], [-1, 0, 1], [-1, 0, 1]])
@@ -929,7 +1388,7 @@ class CellDetector:
         img_prewittx = cv2.filter2D(img_8bit, -1, kernelx)
         img_prewitty = cv2.filter2D(img_8bit, -1, kernely)
         edge_prewitt = np.sqrt(img_prewittx**2 + img_prewitty**2)
-        edge_prewitt = edge_prewitt > 30
+        edge_prewitt = edge_prewitt > self.edge_threshold
         
         # Roberts edge detection
         roberts_x = np.array([[1, 0], [0, -1]])
@@ -937,13 +1396,13 @@ class CellDetector:
         img_robertsx = cv2.filter2D(img_8bit, -1, roberts_x)
         img_robertsy = cv2.filter2D(img_8bit, -1, roberts_y)
         edge_roberts = np.sqrt(img_robertsx**2 + img_robertsy**2)
-        edge_roberts = edge_roberts > 30
+        edge_roberts = edge_roberts > self.edge_threshold
         
         # Sobel edge detection
         sobelx = cv2.Sobel(img_8bit, cv2.CV_64F, 1, 0, ksize=3)
         sobely = cv2.Sobel(img_8bit, cv2.CV_64F, 0, 1, ksize=3)
         edge_sobel = np.sqrt(sobelx**2 + sobely**2)
-        edge_sobel = edge_sobel > 30
+        edge_sobel = edge_sobel > self.edge_threshold
         
         # Edge combination
         roi_edge = edge_canny.astype(bool) | edge_prewitt | edge_roberts | edge_sobel
@@ -952,7 +1411,7 @@ class CellDetector:
         roi_seg = roi_edge | binary_image.astype(bool)
         
         # Pre-processing to reduce noise
-        roi_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=15)
+        roi_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size)
         small_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         roi_seg = cv2.morphologyEx(roi_seg.astype(np.uint8), cv2.MORPH_OPEN, small_kernel)
         
@@ -961,7 +1420,7 @@ class CellDetector:
         final_seg = cv2.morphologyEx(roi_seg.astype(np.uint8), cv2.MORPH_CLOSE, kernel, iterations=2)
         final_seg = morphology.remove_small_objects(final_seg.astype(bool), min_size=20)
         final_seg = morphology.remove_small_holes(final_seg)
-        final_seg = morphology.remove_small_objects(final_seg, min_size=100)
+        final_seg = morphology.remove_small_objects(final_seg, min_size=self.final_min_size)
         
         # Label connected components
         labeled_image = measure.label(final_seg)
@@ -973,20 +1432,32 @@ class CellDetector:
             area = prop.area
             perimeter = prop.perimeter
             circularity = (perimeter * perimeter) / (4 * np.pi * area)
+            eccentricity = prop.eccentricity
             
-            # Cell filtering criteria (adjusted for live detection)
-            if (100 < area < 8000 and 
-                30 < perimeter < 800 and 
-                0.8 < circularity < 12):
-                
-                bbox = prop.bbox
-                height = bbox[2] - bbox[0]
-                width = bbox[3] - bbox[1]
-                
-                # Check aspect ratio
-                if ((height > width and 1.5 * width > height) or 
-                    (width > height and 1.5 * height > width) or 
-                    (height == width)):
+            # Get bounding box for aspect ratio calculation
+            bbox = prop.bbox
+            height = bbox[2] - bbox[0]
+            width = bbox[3] - bbox[1]
+            
+            # Calculate aspect ratio condition using parameter from visualization UI
+            aspect_ratio_condition = (
+                (height > width and self.aspect_ratio_threshold * width > height) or
+                (width > height and self.aspect_ratio_threshold * height > width) or
+                (height == width)
+            )
+            
+            # Cell filtering criteria (aligned with parameter_visualization_ui.py)
+            # First check eccentricity and area thresholds
+            if ((eccentricity < self.eccentricity_threshold and area > self.area_threshold_small) or 
+                (area > self.area_threshold_large)):
+                # Then check area, perimeter, circularity and aspect ratio
+                if (self.min_area < area < self.max_area and 
+                    self.min_perimeter < perimeter < self.max_perimeter and 
+                    self.min_circularity < circularity < self.max_circularity and
+                    aspect_ratio_condition):
+                    
+                    # Calculate centroid
+                    y, x = prop.centroid
                     
                     # If using AOI, adjust the coordinates back to the original image
                     if aoi_coords and all(coord != 0 for coord in aoi_coords):
@@ -1002,15 +1473,18 @@ class CellDetector:
                             'area': area,
                             'perimeter': perimeter,
                             'circularity': circularity,
-                            'centroid': (prop.centroid[0] + y1_aoi, prop.centroid[1] + x1_aoi)
+                            'eccentricity': eccentricity,
+                            'centroid': (y + y1_aoi, x + x1_aoi)
                         })
                     else:
+                        # Add cell to the list
                         detected_cells.append({
                             'bbox': bbox,
+                            'centroid': (y, x),
                             'area': area,
                             'perimeter': perimeter,
                             'circularity': circularity,
-                            'centroid': prop.centroid
+                            'eccentricity': eccentricity
                         })
         
         # Create a visualization of the detected cells
@@ -1056,7 +1530,7 @@ class CellDetector:
 
 def main():
     root = tk.Tk()
-    app = SimpleToupCamLive(root)
+    app = VirtualCameraLive(root)
     root.mainloop()
 
 if __name__ == "__main__":

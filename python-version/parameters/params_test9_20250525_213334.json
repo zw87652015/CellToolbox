@@ -1,0 +1,15 @@
+{
+    "clahe_clip_limit": 2.2,
+    "clahe_tile_size": 6,
+    "min_object_size": 8,
+    "eccentricity_threshold": 0.9574074074074075,
+    "area_threshold_small": 106,
+    "area_threshold_large": 268,
+    "area_min": 50,
+    "area_max": 1200,
+    "perimeter_min": 20,
+    "perimeter_max": 300,
+    "circularity_min": 0.3540740740740741,
+    "circularity_max": 12,
+    "aspect_ratio_threshold": 1.5
+}

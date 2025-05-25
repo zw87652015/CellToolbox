@@ -8,7 +8,7 @@ import os
 import json
 
 # Global variables for cell tracking and persistence
-CAMERASELECTED = 1  # 0~infinity for USB camera index
+CAMERASELECTED = 0  # 0~infinity for USB camera index
 previous_cells = []  # List to store bounding boxes of previously detected cells
 cell_lifetimes = []  # List to track the remaining frames each cell will be displayed
 CELL_MEMORY_FRAMES = 5  # Number of frames to keep tracking a cell after it disappears
