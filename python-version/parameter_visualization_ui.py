@@ -11,6 +11,7 @@ from PIL import Image, ImageTk
 import os
 import time
 import json
+import scipy.ndimage as ndi
 
 class ParameterVisualizationUI:
     def __init__(self, root):
@@ -29,13 +30,18 @@ class ParameterVisualizationUI:
             'eccentricity_threshold': 0.98,
             'area_threshold_small': 200,
             'area_threshold_large': 400,
-            'area_min': 200,
-            'area_max': 3000,
-            'perimeter_min': 300,
-            'perimeter_max': 800,
+            'area_min': 50,
+            'area_max': 300,
+            'perimeter_min': 100,
+            'perimeter_max': 300,
             'circularity_min': 0.8,
             'circularity_max': 12,
-            'aspect_ratio_threshold': 1.5
+            'aspect_ratio_threshold': 1.5,
+            'use_watershed': True,
+            'watershed_distance_threshold': 10,
+            'watershed_footprint_size': 3,
+            'watershed_compactness': 0.5,
+            'watershed_min_area': 500
         }
         
         # Image path
@@ -196,7 +202,7 @@ class ParameterVisualizationUI:
         self.area_min_var = tk.IntVar(value=self.params['area_min'])
         self.area_min_value_label = ttk.Label(area_min_frame, text=f"{self.params['area_min']}")
         self.area_min_value_label.pack(side=tk.RIGHT)
-        area_min_scale = ttk.Scale(self.control_frame, from_=50, to=1000, 
+        area_min_scale = ttk.Scale(self.control_frame, from_=5, to=300, 
                                   variable=self.area_min_var,
                                   command=lambda x: self.update_param('area_min', int(float(x))))
         area_min_scale.pack(fill=tk.X, pady=2)
@@ -207,7 +213,7 @@ class ParameterVisualizationUI:
         self.area_max_var = tk.IntVar(value=self.params['area_max'])
         self.area_max_value_label = ttk.Label(area_max_frame, text=f"{self.params['area_max']}")
         self.area_max_value_label.pack(side=tk.RIGHT)
-        area_max_scale = ttk.Scale(self.control_frame, from_=1000, to=7000, 
+        area_max_scale = ttk.Scale(self.control_frame, from_=50, to=1200, 
                                   variable=self.area_max_var,
                                   command=lambda x: self.update_param('area_max', int(float(x))))
         area_max_scale.pack(fill=tk.X, pady=2)
@@ -219,7 +225,7 @@ class ParameterVisualizationUI:
         self.perimeter_min_var = tk.IntVar(value=self.params['perimeter_min'])
         self.perimeter_min_value_label = ttk.Label(perimeter_min_frame, text=f"{self.params['perimeter_min']}")
         self.perimeter_min_value_label.pack(side=tk.RIGHT)
-        perimeter_min_scale = ttk.Scale(self.control_frame, from_=20, to=300, 
+        perimeter_min_scale = ttk.Scale(self.control_frame, from_=5, to=200, 
                                        variable=self.perimeter_min_var,
                                        command=lambda x: self.update_param('perimeter_min', int(float(x))))
         perimeter_min_scale.pack(fill=tk.X, pady=2)
@@ -230,7 +236,7 @@ class ParameterVisualizationUI:
         self.perimeter_max_var = tk.IntVar(value=self.params['perimeter_max'])
         self.perimeter_max_value_label = ttk.Label(perimeter_max_frame, text=f"{self.params['perimeter_max']}")
         self.perimeter_max_value_label.pack(side=tk.RIGHT)
-        perimeter_max_scale = ttk.Scale(self.control_frame, from_=300, to=1500, 
+        perimeter_max_scale = ttk.Scale(self.control_frame, from_=50, to=400, 
                                        variable=self.perimeter_max_var,
                                        command=lambda x: self.update_param('perimeter_max', int(float(x))))
         perimeter_max_scale.pack(fill=tk.X, pady=2)
@@ -266,9 +272,69 @@ class ParameterVisualizationUI:
         self.aspect_ratio_value_label = ttk.Label(aspect_ratio_frame, text=f"{self.params['aspect_ratio_threshold']:.2f}")
         self.aspect_ratio_value_label.pack(side=tk.RIGHT)
         aspect_ratio_scale = ttk.Scale(self.control_frame, from_=1.0, to=3.0, 
-                                      variable=self.aspect_ratio_var,
-                                      command=lambda x: self.update_param('aspect_ratio_threshold', float(x)))
+                                       variable=self.aspect_ratio_var,
+                                       command=lambda x: self.update_param('aspect_ratio_threshold', float(x)))
         aspect_ratio_scale.pack(fill=tk.X, pady=2)
+        
+        # Watershed Segmentation Parameters
+        ttk.Label(self.control_frame, text="Watershed Segmentation", font=("Arial", 12)).pack(pady=(15, 5), anchor="w")
+        
+        # Enable/Disable Watershed
+        watershed_enable_frame = ttk.Frame(self.control_frame)
+        watershed_enable_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(watershed_enable_frame, text="Use Watershed:").pack(side=tk.LEFT)
+        self.watershed_var = tk.BooleanVar(value=self.params['use_watershed'])
+        self.watershed_checkbox = ttk.Checkbutton(watershed_enable_frame, variable=self.watershed_var,
+                                            command=lambda: self.update_param('use_watershed', self.watershed_var.get()))
+        self.watershed_checkbox.pack(side=tk.RIGHT)
+        
+        # Distance Threshold
+        distance_threshold_frame = ttk.Frame(self.control_frame)
+        distance_threshold_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(distance_threshold_frame, text="Distance Threshold:").pack(side=tk.LEFT)
+        self.distance_threshold_var = tk.IntVar(value=self.params['watershed_distance_threshold'])
+        self.distance_threshold_value_label = ttk.Label(distance_threshold_frame, text=f"{self.params['watershed_distance_threshold']}")
+        self.distance_threshold_value_label.pack(side=tk.RIGHT)
+        distance_threshold_scale = ttk.Scale(self.control_frame, from_=1, to=50, 
+                                        variable=self.distance_threshold_var,
+                                        command=lambda x: self.update_param('watershed_distance_threshold', int(float(x))))
+        distance_threshold_scale.pack(fill=tk.X, pady=2)
+        
+        # Footprint Size
+        footprint_size_frame = ttk.Frame(self.control_frame)
+        footprint_size_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(footprint_size_frame, text="Footprint Size:").pack(side=tk.LEFT)
+        self.footprint_size_var = tk.IntVar(value=self.params['watershed_footprint_size'])
+        self.footprint_size_value_label = ttk.Label(footprint_size_frame, text=f"{self.params['watershed_footprint_size']}")
+        self.footprint_size_value_label.pack(side=tk.RIGHT)
+        footprint_size_scale = ttk.Scale(self.control_frame, from_=1, to=10, 
+                                     variable=self.footprint_size_var,
+                                     command=lambda x: self.update_param('watershed_footprint_size', int(float(x))))
+        footprint_size_scale.pack(fill=tk.X, pady=2)
+        
+        # Compactness
+        compactness_frame = ttk.Frame(self.control_frame)
+        compactness_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(compactness_frame, text="Compactness:").pack(side=tk.LEFT)
+        self.compactness_var = tk.DoubleVar(value=self.params['watershed_compactness'])
+        self.compactness_value_label = ttk.Label(compactness_frame, text=f"{self.params['watershed_compactness']:.2f}")
+        self.compactness_value_label.pack(side=tk.RIGHT)
+        compactness_scale = ttk.Scale(self.control_frame, from_=0.0, to=1.0, 
+                                  variable=self.compactness_var,
+                                  command=lambda x: self.update_param('watershed_compactness', float(x)))
+        compactness_scale.pack(fill=tk.X, pady=2)
+        
+        # Minimum Area for Watershed
+        min_area_frame = ttk.Frame(self.control_frame)
+        min_area_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(min_area_frame, text="Min Area for Watershed:").pack(side=tk.LEFT)
+        self.watershed_min_area_var = tk.IntVar(value=self.params['watershed_min_area'])
+        self.watershed_min_area_value_label = ttk.Label(min_area_frame, text=f"{self.params['watershed_min_area']}")
+        self.watershed_min_area_value_label.pack(side=tk.RIGHT)
+        min_area_scale = ttk.Scale(self.control_frame, from_=100, to=1000, 
+                              variable=self.watershed_min_area_var,
+                              command=lambda x: self.update_param('watershed_min_area', int(float(x))))
+        min_area_scale.pack(fill=tk.X, pady=2)
         
         # Add parameter save/load buttons
         param_buttons_frame = ttk.Frame(self.control_frame)
@@ -343,6 +409,14 @@ class ParameterVisualizationUI:
             self.circularity_max_value_label.config(text=f"{value:.2f}")
         elif param_name == 'aspect_ratio_threshold':
             self.aspect_ratio_value_label.config(text=f"{value:.2f}")
+        elif param_name == 'watershed_distance_threshold':
+            self.distance_threshold_value_label.config(text=f"{value}")
+        elif param_name == 'watershed_footprint_size':
+            self.footprint_size_value_label.config(text=f"{value}")
+        elif param_name == 'watershed_compactness':
+            self.compactness_value_label.config(text=f"{value:.2f}")
+        elif param_name == 'watershed_min_area':
+            self.watershed_min_area_value_label.config(text=f"{value}")
         
         # Process the image automatically when a parameter changes
         if self.image_path is not None and self.original_image is not None:
@@ -476,6 +550,26 @@ class ParameterVisualizationUI:
         
         self.aspect_ratio_var.set(self.params['aspect_ratio_threshold'])
         self.aspect_ratio_value_label.config(text=f"{self.params['aspect_ratio_threshold']:.2f}")
+        
+        # Update watershed parameters
+        if 'use_watershed' in self.params:
+            self.watershed_var.set(self.params['use_watershed'])
+        
+        if 'watershed_distance_threshold' in self.params:
+            self.distance_threshold_var.set(self.params['watershed_distance_threshold'])
+            self.distance_threshold_value_label.config(text=f"{self.params['watershed_distance_threshold']}")
+        
+        if 'watershed_footprint_size' in self.params:
+            self.footprint_size_var.set(self.params['watershed_footprint_size'])
+            self.footprint_size_value_label.config(text=f"{self.params['watershed_footprint_size']}")
+        
+        if 'watershed_compactness' in self.params:
+            self.compactness_var.set(self.params['watershed_compactness'])
+            self.compactness_value_label.config(text=f"{self.params['watershed_compactness']:.2f}")
+            
+        if 'watershed_min_area' in self.params:
+            self.watershed_min_area_var.set(self.params['watershed_min_area'])
+            self.watershed_min_area_value_label.config(text=f"{self.params['watershed_min_area']}")
     
     def open_image(self):
         file_path = filedialog.askopenfilename(
@@ -485,10 +579,28 @@ class ParameterVisualizationUI:
         
         if file_path:
             self.image_path = file_path
-            self.original_image = cv2.imread(file_path)
-            if self.original_image is not None:
-                self.status_label.config(text="Image loaded - Processing...")
-                self.process_current_image()
+            try:
+                # Try to load the image using a normalized path to handle non-ASCII characters
+                normalized_path = os.path.normpath(file_path)
+                self.original_image = cv2.imread(normalized_path)
+                
+                # If the image is still None, try with PIL and convert to OpenCV format
+                if self.original_image is None:
+                    pil_image = Image.open(file_path)
+                    self.original_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+                    
+                if self.original_image is not None:
+                    self.status_label.config(text="Image loaded - Processing...")
+                    self.process_current_image()
+                else:
+                    self.status_label.config(text="Error: Could not load image")
+                    messagebox.showerror("Error", f"Failed to load image: {os.path.basename(file_path)}")
+            except Exception as e:
+                self.status_label.config(text=f"Error: {str(e)}")
+                messagebox.showerror("Error", f"Failed to load image: {str(e)}")
+                print(f"Error loading image: {str(e)}")
+        else:
+            self.status_label.config(text="Image loading cancelled")
     
     def process_current_image(self):
         if self.image_path is None or self.original_image is None:
@@ -652,8 +764,71 @@ class ParameterVisualizationUI:
         
         final_seg = mask
         
-        # Label connected components
-        labeled_image = measure.label(final_seg)
+        # Apply watershed segmentation to separate touching cells if enabled
+        if self.params['use_watershed']:
+            # Get watershed parameters
+            distance_threshold = self.params['watershed_distance_threshold']
+            footprint_size = self.params['watershed_footprint_size']
+            compactness = self.params['watershed_compactness']
+            watershed_min_area = self.params['watershed_min_area']
+            
+            # First, get the original labeled image and region properties
+            original_labeled = measure.label(final_seg)
+            original_props = measure.regionprops(original_labeled)
+            
+            # Create a mask for large objects that need watershed segmentation
+            large_objects_mask = np.zeros_like(final_seg, dtype=bool)
+            for prop in original_props:
+                if prop.area > watershed_min_area:
+                    large_objects_mask[original_labeled == prop.label] = True
+            
+            # Create a mask for small objects that don't need watershed segmentation
+            small_objects_mask = final_seg & ~large_objects_mask
+            
+            # Only apply watershed to large objects
+            if np.any(large_objects_mask):
+                # Distance transform on large objects only
+                distance = ndi.distance_transform_edt(large_objects_mask)
+                
+                # Apply threshold to distance map to find markers
+                # This helps identify separate cells even when they're touching
+                distance_peaks = distance > distance_threshold
+                
+                # Clean up the peaks to get better markers
+                distance_peaks = morphology.remove_small_objects(distance_peaks, min_size=2)
+                
+                # Label the peaks as markers
+                markers = measure.label(distance_peaks)
+                
+                # Apply watershed segmentation to large objects only
+                # Use the negative distance as the input for watershed
+                watershed_labels = segmentation.watershed(-distance, markers, mask=large_objects_mask, 
+                                                        compactness=compactness)
+                
+                # Combine the watershed segmentation of large objects with the small objects
+                # First, get the maximum label from watershed_labels
+                max_watershed_label = np.max(watershed_labels) if np.any(watershed_labels) else 0
+                
+                # Label the small objects starting from max_watershed_label + 1
+                small_objects_labeled = measure.label(small_objects_mask)
+                small_objects_labeled[small_objects_labeled > 0] += max_watershed_label
+                
+                # Combine the two labeled images
+                combined_labels = watershed_labels.copy()
+                combined_labels[small_objects_mask] = small_objects_labeled[small_objects_mask]
+                
+                # Final labeled image
+                labeled_image = combined_labels
+            else:
+                # If no large objects, just use the original labeling
+                labeled_image = original_labeled
+        else:
+            # Label connected components without watershed
+            labeled_image = measure.label(final_seg)
+        
+        # Calculate region properties based on the final labeled image (after watershed if enabled)
+        # This ensures that the properties are calculated for the separated cells
+        watershed_props = measure.regionprops(labeled_image)
         
         # Create the three output images
         
@@ -665,7 +840,8 @@ class ParameterVisualizationUI:
         ax_params = fig_params.add_subplot(111)
         ax_params.imshow(org_rgb)
         
-        for prop in props:
+        # Use the watershed_props instead of props to display parameters for separated cells
+        for prop in watershed_props:
             area = prop.area
             perimeter = prop.perimeter
             circularity = (perimeter * perimeter) / (4 * np.pi * area)
@@ -696,7 +872,8 @@ class ParameterVisualizationUI:
         ax_final = fig_final.add_subplot(111)
         ax_final.imshow(org_rgb)
         
-        for prop in props:
+        # Use the watershed_props instead of props for the final result image
+        for prop in watershed_props:
             area = prop.area
             perimeter = prop.perimeter
             circularity = (perimeter * perimeter) / (4 * np.pi * area)

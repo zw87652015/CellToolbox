@@ -267,6 +267,9 @@ class SimpleToupCamLive:
             self.hcam.put_Contrast(0)
             self.hcam.put_Gamma(100)  # 1.0
             
+            # Set white balance
+            self.hcam.put_TempTint(4796, 1153)  # Temperature 4796, Tint 1153
+            
             # Allocate buffer for image data
             buffer_size = toupcam.TDIBWIDTHBYTES(self.frame_width * 24) * self.frame_height
             self.cam_buffer = bytes(buffer_size)
@@ -341,15 +344,28 @@ class SimpleToupCamLive:
         canvas_height = self.canvas.winfo_height()
         
         if canvas_width > 1 and canvas_height > 1:
-            # Use the full canvas size for display, stretching if needed
-            display_width = canvas_width
-            display_height = canvas_height
+            # Calculate the display size while maintaining aspect ratio
+            camera_aspect_ratio = self.frame_width / self.frame_height
+            canvas_aspect_ratio = canvas_width / canvas_height
+            
+            if canvas_aspect_ratio > camera_aspect_ratio:
+                # Canvas is wider than needed - height will be the constraint
+                display_height = canvas_height
+                display_width = int(display_height * camera_aspect_ratio)
+                # Center horizontally
+                self.display_offset_x = (canvas_width - display_width) // 2
+                self.display_offset_y = 0
+            else:
+                # Canvas is taller than needed - width will be the constraint
+                display_width = canvas_width
+                display_height = int(display_width / camera_aspect_ratio)
+                # Center vertically
+                self.display_offset_x = 0
+                self.display_offset_y = (canvas_height - display_height) // 2
             
             # Store display dimensions for coordinate mapping
             self.display_width = display_width
             self.display_height = display_height
-            self.display_offset_x = 0  # No offset
-            self.display_offset_y = 0  # No offset
             
             # Convert BGR to RGB for display
             rgb_frame = cv2.cvtColor(self.frame_buffer, cv2.COLOR_BGR2RGB)
@@ -366,7 +382,16 @@ class SimpleToupCamLive:
                 # Create a mask for the AOI (white inside AOI, black outside)
                 mask = np.zeros((display_height, display_width), dtype=np.uint8)
                 x1, y1, x2, y2 = self.get_adjusted_aoi_coords()
-                cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)  # Fill rectangle with white
+                
+                # Convert canvas coordinates to image coordinates
+                mask_x1 = max(0, x1 - self.display_offset_x)
+                mask_y1 = max(0, y1 - self.display_offset_y)
+                mask_x2 = min(display_width, x2 - self.display_offset_x)
+                mask_y2 = min(display_height, y2 - self.display_offset_y)
+                
+                # Only draw if we have valid coordinates
+                if mask_x1 < mask_x2 and mask_y1 < mask_y2:
+                    cv2.rectangle(mask, (mask_x1, mask_y1), (mask_x2, mask_y2), 255, -1)  # Fill rectangle with white
                 
                 # Darken areas outside AOI
                 alpha = self.opacity_var.get()  # Get opacity from slider
@@ -401,17 +426,20 @@ class SimpleToupCamLive:
             # If this is the first frame, create the image on the canvas
             if not self.canvas.find_withtag("video"):
                 self.canvas.create_image(
-                    0, 0,  # Position at top-left corner
+                    self.display_offset_x, self.display_offset_y,  # Position with calculated offsets
                     anchor=tk.NW,  # Northwest anchor (top-left)
                     image=self.photo_image,
                     tags=("video",)
                 )
             else:
-                # Update the existing image
+                # Update the existing image and position
                 self.canvas.itemconfig("video", image=self.photo_image)
+                self.canvas.coords("video", self.display_offset_x, self.display_offset_y)
                 
             # Update AOI rectangle if it exists
             if self.aoi_rect:
+                # Use the original AOI coordinates for the rectangle on canvas
+                # since the canvas already has the image positioned with offsets
                 x1, y1, x2, y2 = self.get_adjusted_aoi_coords()
                 self.canvas.coords(self.aoi_rect, x1, y1, x2, y2)
                 
@@ -547,13 +575,22 @@ class SimpleToupCamLive:
         self.status_var.set("AOI cleared")
     
     def get_adjusted_aoi_coords(self):
-        """Return AOI coordinates adjusted to ensure x1<x2 and y1<y2"""
+        """Return AOI coordinates adjusted to ensure x1<x2 and y1<y2 and account for display offsets"""
         x1, y1, x2, y2 = self.aoi_coords
+        
         # Ensure x1 < x2 and y1 < y2
         if x1 > x2:
             x1, x2 = x2, x1
         if y1 > y2:
             y1, y2 = y2, y1
+            
+        # Clamp coordinates to the visible display area
+        # This ensures the AOI is within the visible image area
+        x1 = max(self.display_offset_x, min(x1, self.display_offset_x + self.display_width))
+        x2 = max(self.display_offset_x, min(x2, self.display_offset_x + self.display_width))
+        y1 = max(self.display_offset_y, min(y1, self.display_offset_y + self.display_height))
+        y2 = max(self.display_offset_y, min(y2, self.display_offset_y + self.display_height))
+        
         return [x1, y1, x2, y2]
     
     def update_aoi_overlay(self, *args):
@@ -601,6 +638,33 @@ class SimpleToupCamLive:
         self.cell_detection_active = False
         self.status_var.set("Cell detection stopped")
     
+    def display_to_camera_coords(self, display_coords):
+        """Convert display coordinates to camera coordinates"""
+        x1, y1, x2, y2 = display_coords
+        
+        # Adjust for display offsets
+        x1 = max(0, x1 - self.display_offset_x)
+        x2 = max(0, x2 - self.display_offset_x)
+        y1 = max(0, y1 - self.display_offset_y)
+        y2 = max(0, y2 - self.display_offset_y)
+        
+        # Scale to camera resolution
+        scale_x = self.frame_width / self.display_width
+        scale_y = self.frame_height / self.display_height
+        
+        cam_x1 = int(x1 * scale_x)
+        cam_x2 = int(x2 * scale_x)
+        cam_y1 = int(y1 * scale_y)
+        cam_y2 = int(y2 * scale_y)
+        
+        # Ensure coordinates are within camera bounds
+        cam_x1 = max(0, min(cam_x1, self.frame_width - 1))
+        cam_x2 = max(0, min(cam_x2, self.frame_width - 1))
+        cam_y1 = max(0, min(cam_y1, self.frame_height - 1))
+        cam_y2 = max(0, min(cam_y2, self.frame_height - 1))
+        
+        return [cam_x1, cam_y1, cam_x2, cam_y2]
+    
     def cell_detection_loop(self):
         """Background thread for cell detection"""
         try:
@@ -618,11 +682,14 @@ class SimpleToupCamLive:
                         else:
                             continue
                     
-                    # Get the adjusted AOI coordinates
-                    aoi_coords = self.get_adjusted_aoi_coords()
+                    # Get the adjusted AOI coordinates in display space
+                    display_aoi_coords = self.get_adjusted_aoi_coords()
                     
-                    # Detect cells in the AOI
-                    self.detected_cells, result_image = self.cell_detector.detect_cells(frame, aoi_coords)
+                    # Convert to camera coordinates
+                    camera_aoi_coords = self.display_to_camera_coords(display_aoi_coords)
+                    
+                    # Detect cells in the AOI using camera coordinates
+                    self.detected_cells, result_image = self.cell_detector.detect_cells(frame, camera_aoi_coords)
                     
                     # Update the cell count display
                     self.cell_count_var.set(f"Cells: {len(self.detected_cells)}")

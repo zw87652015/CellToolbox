@@ -1,0 +1,20 @@
+{
+    "clahe_clip_limit": 2.1166666666666667,
+    "clahe_tile_size": 2,
+    "min_object_size": 8,
+    "eccentricity_threshold": 0.9574074074074075,
+    "area_threshold_small": 106,
+    "area_threshold_large": 268,
+    "area_min": 50,
+    "area_max": 600,
+    "perimeter_min": 12,
+    "perimeter_max": 331,
+    "circularity_min": 0.3540740740740741,
+    "circularity_max": 12,
+    "aspect_ratio_threshold": 2.362962962962963,
+    "use_watershed": true,
+    "watershed_distance_threshold": 1,
+    "watershed_footprint_size": 2,
+    "watershed_compactness": 0.5,
+    "watershed_min_area": 500
+}
