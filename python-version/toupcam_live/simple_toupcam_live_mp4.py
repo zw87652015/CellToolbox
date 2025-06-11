@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import json
 import scipy.ndimage as ndi
+import importlib.util
 
 # Import for multi-monitor support
 try:
@@ -28,10 +29,35 @@ except ImportError:
     print("win32api not available. Multi-monitor support will be limited.")
     # You may need to install pywin32: pip install pywin32
 
+# Import the SecondaryDisplay class
+try:
+    # Get the path to the secondary_display.py file
+    secondary_display_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secondary_display.py")
+    
+    # Load the module dynamically
+    spec = importlib.util.spec_from_file_location("secondary_display", secondary_display_path)
+    secondary_display = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(secondary_display)
+    
+    HAS_SECONDARY_DISPLAY = True
+except Exception as e:
+    print(f"Error importing secondary_display module: {e}")
+    HAS_SECONDARY_DISPLAY = False
+
 class MP4VideoLive:
     def __init__(self, root):
         self.root = root
         self.root.title("MP4 Video Live Stream")
+        
+        # Get monitor information for multi-monitor setup
+        self.monitors = self.get_monitor_info()
+        
+        # Determine which monitor to use for primary display
+        self.primary_monitor = next((m for m in self.monitors if m['is_primary']), self.monitors[0])
+        
+        # Position the main window on the primary monitor
+        self.root.geometry(f"{self.primary_monitor['width']}x{self.primary_monitor['height']}+{self.primary_monitor['left']}+{self.primary_monitor['top']}")
+        
         # Initialize in fullscreen mode
         self.root.attributes('-fullscreen', True)
         # Add key binding to exit fullscreen with Escape key
@@ -53,6 +79,10 @@ class MP4VideoLive:
         # UI update variables
         self.frame_count = 0
         self.fps = 0
+        
+        # Secondary display for AOI
+        self.secondary_display = None
+        self.initialize_secondary_display()
         self.last_fps_time = time.time()
         self.new_frame_available = False
         self.frame_lock = threading.Lock()
@@ -90,9 +120,139 @@ class MP4VideoLive:
         
         # Start rendering thread
         self.start_render_thread()
+    
+    def get_monitor_info(self):
+        """Get information about available monitors
         
-        # Make sure the window is visible
-        self.root.update()
+        Returns:
+            list: List of monitor information dictionaries
+        """
+        monitors = []
+        
+        if HAS_WIN32API:
+            try:
+                # Get information for all monitors
+                monitor_info = win32api.EnumDisplayMonitors()
+                
+                # Get detailed information for each monitor
+                for i, monitor in enumerate(monitor_info):
+                    monitor_rect = win32api.GetMonitorInfo(monitor[0])
+                    work_area = monitor_rect['Work']
+                    monitor_area = monitor_rect['Monitor']
+                    is_primary = (monitor_rect['Flags'] == 1)  # Primary monitor has flag value 1
+                    
+                    monitors.append({
+                        'index': i,
+                        'left': monitor_area[0],
+                        'top': monitor_area[1],
+                        'right': monitor_area[2],
+                        'bottom': monitor_area[3],
+                        'width': monitor_area[2] - monitor_area[0],
+                        'height': monitor_area[3] - monitor_area[1],
+                        'work_left': work_area[0],
+                        'work_top': work_area[1],
+                        'work_right': work_area[2],
+                        'work_bottom': work_area[3],
+                        'work_width': work_area[2] - work_area[0],
+                        'work_height': work_area[3] - work_area[1],
+                        'is_primary': is_primary
+                    })
+                    
+                    print(f"Monitor {i}: {'Primary' if is_primary else 'Secondary'}")
+                    print(f"  Position: ({monitor_area[0]}, {monitor_area[1]}) -> ({monitor_area[2]}, {monitor_area[3]})")
+                    print(f"  Size: {monitor_area[2] - monitor_area[0]} x {monitor_area[3] - monitor_area[1]}")
+                    
+            except Exception as e:
+                print(f"Error getting monitor information: {e}")
+        
+        # If no monitors detected or win32api not available, create a fallback entry
+        if not monitors:
+            # Get screen dimensions from tkinter as fallback
+            screen_width = self.root.winfo_screenwidth()
+            screen_height = self.root.winfo_screenheight()
+            
+            monitors.append({
+                'index': 0,
+                'left': 0,
+                'top': 0,
+                'right': screen_width,
+                'bottom': screen_height,
+                'width': screen_width,
+                'height': screen_height,
+                'work_left': 0,
+                'work_top': 0,
+                'work_right': screen_width,
+                'work_bottom': screen_height,
+                'work_width': screen_width,
+                'work_height': screen_height,
+                'is_primary': True
+            })
+        
+        return monitors
+        
+    def initialize_secondary_display(self):
+        """Initialize the secondary display window for AOI visualization"""
+        if not HAS_SECONDARY_DISPLAY:
+            print("Secondary display module not available. Skipping secondary display initialization.")
+            return
+            
+        try:
+            # Check if we have multiple monitors
+            if len(self.monitors) > 1:
+                # Find the first non-primary monitor
+                secondary_monitor = next((m for m in self.monitors if not m['is_primary']), None)
+                
+                if secondary_monitor:
+                    print(f"Initializing secondary display on monitor {secondary_monitor['index']}")
+                    # Create the secondary display instance
+                    self.secondary_display = secondary_display.SecondaryDisplay(secondary_monitor)
+                    print("Secondary display initialized successfully")
+                else:
+                    print("No secondary monitor found. Secondary display will not be initialized.")
+            else:
+                print("Only one monitor detected. Secondary display will not be initialized.")
+        except Exception as e:
+            print(f"Error initializing secondary display: {e}")
+            self.secondary_display = None
+    
+    def toggle_fullscreen(self):
+        """Toggle fullscreen mode"""
+        self.fullscreen = not self.fullscreen
+        
+        # If exiting fullscreen, first restore normal window state
+        if not self.fullscreen:
+            self.root.attributes('-fullscreen', False)
+            # Ensure window is positioned on the correct monitor
+            self.root.geometry(f"{self.primary_monitor['width']}x{self.primary_monitor['height']}+{self.primary_monitor['left']}+{self.primary_monitor['top']}")
+            self.root.update()
+        
+        # If entering fullscreen, ensure window is on correct monitor first, then go fullscreen
+        if self.fullscreen:
+            # First ensure window is positioned on the correct monitor
+            self.root.geometry(f"{self.primary_monitor['width']}x{self.primary_monitor['height']}+{self.primary_monitor['left']}+{self.primary_monitor['top']}")
+            self.root.update()
+            # Then go fullscreen
+            self.root.attributes('-fullscreen', True)
+    
+    def update_secondary_display(self):
+        """Update the secondary display with current AOI information"""
+        # Only update if secondary display exists and we have valid AOI coordinates
+        if self.secondary_display is not None and hasattr(self, 'aoi_coords') and self.aoi_coords is not None:
+            # Don't update if AOI is empty/invalid
+            if not all(coord != 0 for coord in self.aoi_coords):
+                return
+                
+            # Update the AOI display on the secondary monitor
+            try:
+                self.secondary_display.update_aoi(
+                    self.aoi_coords,
+                    self.frame_width,
+                    self.frame_height
+                )
+            except Exception as e:
+                print(f"Error updating secondary display: {e}")
+                
+        # Don't call update() here to avoid potential recursion issues
     
     def create_ui(self):
         """Create a user interface with canvas for video display and control panel"""
@@ -187,6 +347,28 @@ class MP4VideoLive:
         # Create a second row for additional controls
         control_row2 = ttk.Frame(video_control_frame)
         control_row2.pack(fill=tk.X, padx=5, pady=(0, 5))
+        
+        # Calibration rectangle controls
+        calibration_frame = ttk.LabelFrame(control_frame, text="Calibration Rectangles")
+        calibration_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Load calibration button
+        self.load_calibration_button = ttk.Button(
+            calibration_frame,
+            text="Load Calibration",
+            command=self.load_calibration
+        )
+        self.load_calibration_button.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Toggle calibration rectangles button
+        self.show_calibration_var = tk.BooleanVar(value=False)
+        self.show_calibration_button = ttk.Checkbutton(
+            calibration_frame,
+            text="Show Calibration Boxes",
+            variable=self.show_calibration_var,
+            command=self.toggle_calibration_rectangles
+        )
+        self.show_calibration_button.pack(fill=tk.X, padx=5, pady=5)
         
         # Toggle fullscreen button
         fullscreen_button = ttk.Button(control_row2, text="Toggle Fullscreen (Esc)", command=self.toggle_fullscreen)
@@ -727,14 +909,20 @@ class MP4VideoLive:
         if not self.running or self.frame_buffer is None:
             return
             
-        # Get the current canvas size
-        canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
-        
-        if canvas_width > 1 and canvas_height > 1:
-            # Calculate aspect ratio of the video
-            video_aspect_ratio = self.frame_width / self.frame_height  # 2688/1520 = 1.77
-            canvas_aspect_ratio = canvas_width / canvas_height
+        # Prevent recursive calls
+        if hasattr(self, '_updating_frame') and self._updating_frame:
+            return
+        self._updating_frame = True
+            
+        try:
+            # Get the current canvas size
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            
+            if canvas_width > 1 and canvas_height > 1:
+                # Calculate aspect ratio of the video
+                video_aspect_ratio = self.frame_width / self.frame_height  # 2688/1520 = 1.77
+                canvas_aspect_ratio = canvas_width / canvas_height
             
             # Maintain aspect ratio while fitting in the canvas
             if canvas_aspect_ratio > video_aspect_ratio:
@@ -753,6 +941,9 @@ class MP4VideoLive:
             # Store display dimensions for coordinate mapping
             self.display_width = display_width
             self.display_height = display_height
+            
+            # Calculate and store the display scale for calibration rectangles
+            self.display_scale = min(display_width / self.frame_width, display_height / self.frame_height)
             
             # Convert BGR to RGB for display
             rgb_frame = cv2.cvtColor(self.frame_buffer, cv2.COLOR_BGR2RGB)
@@ -784,9 +975,25 @@ class MP4VideoLive:
                     
                     # Apply the mask: keep original frame inside AOI, darkened outside
                     rgb_frame = np.where(mask_3ch > 0, rgb_frame, overlay_dark)
+                    
+                    # Update the secondary display with the current AOI
+                    self.update_secondary_display()
             
             # Resize the frame to fit the display dimensions
             display_frame = cv2.resize(rgb_frame, (self.display_width, self.display_height))
+            
+            # Draw calibration rectangles if enabled
+            if self.show_calibration_rectangles and self.calibration_rectangles:
+                # Draw calibration rectangles on the original frame before resizing
+                for x1, y1, x2, y2 in self.calibration_rectangles:
+                    # Scale coordinates to display frame
+                    display_x1 = int((x1 / self.frame_width) * self.display_width)
+                    display_y1 = int((y1 / self.frame_height) * self.display_height)
+                    display_x2 = int((x2 / self.frame_width) * self.display_width)
+                    display_y2 = int((y2 / self.frame_height) * self.display_height)
+                    
+                    # Draw white rectangle on display frame
+                    cv2.rectangle(display_frame, (display_x1, display_y1), (display_x2, display_y2), (255, 255, 255), 2)
             
             # Draw detected cells on the display if cell detection is active
             if self.cell_detection_active and hasattr(self, 'detected_cells') and self.detected_cells:
@@ -862,6 +1069,11 @@ class MP4VideoLive:
                 
                 # Update handle positions
                 self.update_handle_positions()
+        except Exception as e:
+            print(f"Error in update_frame: {e}")
+        finally:
+            # Reset the updating flag
+            self._updating_frame = False
     
     def start_render_thread(self):
         """Start a dedicated thread for rendering frames"""
@@ -959,28 +1171,147 @@ class MP4VideoLive:
                 print("Application destroyed")
             except Exception as e:
                 print(f"Error during destroy: {e}")
-                
     def toggle_fullscreen(self, event=None):
         """Toggle between fullscreen and windowed mode"""
         self.fullscreen = not self.fullscreen
         self.root.attributes('-fullscreen', self.fullscreen)
-        
-        if not self.fullscreen:
-            # If exiting fullscreen, set a reasonable window size
-            screen_width = self.root.winfo_screenwidth()
-            screen_height = self.root.winfo_screenheight()
-            window_width = min(int(screen_width * 0.8), 1600)
-            window_height = min(int(screen_height * 0.8), 900)
-            self.root.geometry(f"{window_width}x{window_height}+{(screen_width-window_width)//2}+{(screen_height-window_height)//2}")
+
+    def load_calibration_rectangles(self, filename):
+        """Load calibration rectangles from a JSON file"""
+        try:
+            with open(filename, 'r') as file:
+                rectangles = json.load(file)
+                self.calibration_rectangles = []
+                for rect in rectangles:
+                    # Extract rectangle coordinates
+                    x = rect.get('x', 0)
+                    y = rect.get('y', 0)
+                    width = rect.get('width', 0)
+                    height = rect.get('height', 0)
+                    visible = rect.get('visible', True)
+                    
+                    if visible:
+                        # Store as (x1, y1, x2, y2) format
+                        self.calibration_rectangles.append((x, y, x + width, y + height))
+                        
+            self.status_var.set(f"Loaded {len(self.calibration_rectangles)} calibration rectangles")
+            print(f"Loaded {len(self.calibration_rectangles)} calibration rectangles")
+            return True
+        except FileNotFoundError:
+            self.status_var.set(f"File {filename} not found")
+            print(f"File {filename} not found")
+            return False
+        except Exception as e:
+            self.status_var.set(f"Error loading calibration rectangles: {e}")
+            print(f"Error loading calibration rectangles: {e}")
+            return False
+
+    def display_calibration_rectangles(self, frame=None):
+        """Display calibration rectangles on the canvas or frame"""
+        if not self.show_calibration_rectangles or not self.calibration_rectangles:
+            return frame
             
-        # Force a redraw to update the display
-        self.root.update_idletasks()
+        # If frame is provided, draw on the frame (for update_frame)
+        if frame is not None:
+            # Make a copy of the frame to avoid modifying the original
+            display_frame = frame.copy()
+            
+            # Draw rectangles on the frame
+            for x1, y1, x2, y2 in self.calibration_rectangles:
+                # Draw white rectangle on the frame
+                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+                
+            return display_frame
+        # Otherwise, draw on the canvas (for direct display)
+        else:
+            # Delete previous calibration rectangles
+            self.canvas.delete("calibration_rect")
+            
+            # Draw new rectangles
+            for x1, y1, x2, y2 in self.calibration_rectangles:
+                # Convert to display coordinates
+                display_x1 = int(x1 * self.display_scale + self.display_offset_x)
+                display_y1 = int(y1 * self.display_scale + self.display_offset_y)
+                display_x2 = int(x2 * self.display_scale + self.display_offset_x)
+                display_y2 = int(y2 * self.display_scale + self.display_offset_y)
+                
+                # Draw rectangle on canvas
+                self.canvas.create_rectangle(
+                    display_x1, display_y1, display_x2, display_y2, 
+                    outline='white', width=2, tags="calibration_rect"
+                )
+            
+            return None
+
+    def toggle_calibration_rectangles(self):
+        """Toggle display of calibration rectangles"""
+        self.show_calibration_rectangles = not self.show_calibration_rectangles
+        self.show_calibration_var.set(self.show_calibration_rectangles)  # Update the checkbox state
+        
+        if self.show_calibration_rectangles:
+            self.status_var.set("Calibration rectangles enabled")
+        else:
+            self.status_var.set("Calibration rectangles disabled")
+            # Remove rectangles from canvas
+            self.canvas.delete("calibration_rect")
+        
+        # Force frame update to refresh display
         self.new_frame_available = True
         
-        return "break"  # Prevent the event from propagating
-    
+    def load_calibration(self):
+        """Open a file dialog to load calibration rectangles from a JSON file"""
+        # Create a temporary toplevel window as parent for the file dialog
+        dialog_root = tk.Toplevel(self.root)
+        dialog_root.withdraw()  # Hide the window
+        
+        # Show file dialog
+        file_path = filedialog.askopenfilename(
+            parent=dialog_root,
+            title="Select Calibration File",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialdir="e:/Documents/Codes/Matlab/CellToolbox/python-version/ManualShapes"
+        )
+        
+        # Destroy the dialog parent
+        dialog_root.destroy()
+        
+        # Load calibration if a file was selected
+        if file_path:
+            if self.load_calibration_rectangles(file_path):
+                # Enable showing calibration rectangles
+                self.show_calibration_rectangles = True
+                self.show_calibration_var.set(True)
+                # Force frame update
+                self.new_frame_available = True
+
+    def __init__(self, root):
+        """Initialize the application"""
+        self.root = root
+        self.root.title("MP4 Video Live View")
+        
+        # Set initial window size to 80% of screen size
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        window_width = int(screen_width * 0.8)
+        window_height = int(screen_height * 0.8)
+        self.root.geometry(f"{window_width}x{window_height}")
+        
+        # Bind escape key to exit fullscreen
+        self.root.bind("<Escape>", lambda e: self.toggle_fullscreen() if self.fullscreen else None)
+        
+        # Bind window close event
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # Calibration rectangles
+        self.calibration_rectangles = []
+        self.show_calibration_rectangles = False
+        self.display_scale = 1.0  # Scale factor for display
+        self.display_offset_x = 0  # X offset for display
+        self.display_offset_y = 0  # Y offset for display
+
     def start_cell_detection(self):
         """Start cell detection processing"""
+# ... (rest of the code remains the same)
         if not self.cell_detection_active:
             self.cell_detection_active = True
             self.start_detection_button.config(state=tk.DISABLED)
@@ -999,6 +1330,9 @@ class MP4VideoLive:
         """Toggle AOI drawing mode"""
         self.aoi_active = self.draw_aoi_var.get()
         if self.aoi_active:
+            # Make sure secondary display is initialized when enabling AOI drawing
+            if self.secondary_display is None:
+                self.initialize_secondary_display()
             self.status_var.set("Click and drag to draw Area of Interest")
         else:
             self.status_var.set("AOI drawing disabled")
@@ -1020,6 +1354,9 @@ class MP4VideoLive:
         
         # Force a frame update to clear the grey mask overlay
         self.new_frame_available = True
+        
+        # Update the secondary display to clear the AOI
+        self.update_secondary_display()
         
         self.status_var.set("AOI cleared")
     
@@ -1254,10 +1591,9 @@ class MP4VideoLive:
         self.min_circularity_value_label.config(text=f"{value:.1f}")
     
     def update_max_circularity(self, value):
-        """Update the maximum circularity value"""
+        """Update max circularity value"""
         value = float(value)
         self.max_circularity_value_label.config(text=f"{value:.1f}")
-        # We'll apply the parameters when the user clicks the Apply Button
         
     def update_aspect_ratio(self, value):
         """Update the aspect ratio threshold"""
@@ -1543,7 +1879,136 @@ class MP4VideoLive:
         
         # Update status
         self.status_var.set("Detection parameters applied")
+        
+    def load_parameters_from_file(self, param_file):
+        """Load detection parameters from a specific JSON file path"""
+        try:
+            # Update status
+            self.status_var.set(f"Loading parameters from {os.path.basename(param_file)}...")
+            
+            # Load parameters from JSON file
+            with open(param_file, 'r') as f:
+                params = json.load(f)
+                
+            # Update UI variables with loaded parameters
+            if 'clahe_clip_limit' in params:
+                self.clahe_clip_var.set(params['clahe_clip_limit'])
+                self.update_clahe_clip(params['clahe_clip_limit'])
+                
+            if 'clahe_tile_size' in params:
+                self.clahe_tile_var.set(params['clahe_tile_size'])
+                self.update_clahe_tile(params['clahe_tile_size'])
+                
+            if 'min_object_size' in params:
+                self.min_object_size_var.set(params['min_object_size'])
+                self.update_min_object_size(params['min_object_size'])
+                
+            if 'eccentricity_threshold' in params:
+                self.eccentricity_var.set(params['eccentricity_threshold'])
+                self.update_eccentricity(params['eccentricity_threshold'])
+                
+            if 'area_threshold_small' in params:
+                self.area_small_var.set(params['area_threshold_small'])
+                self.update_area_small(params['area_threshold_small'])
+                
+            if 'area_threshold_large' in params:
+                self.area_large_var.set(params['area_threshold_large'])
+                self.update_area_large(params['area_threshold_large'])
+                
+            if 'area_min' in params:
+                self.min_area_var.set(params['area_min'])
+                self.update_min_area(params['area_min'])
+                
+            if 'area_max' in params:
+                self.max_area_var.set(params['area_max'])
+                self.update_max_area(params['area_max'])
+                
+            if 'perimeter_min' in params:
+                self.min_perimeter_var.set(params['perimeter_min'])
+                self.update_min_perimeter(params['perimeter_min'])
+                
+            if 'perimeter_max' in params:
+                self.max_perimeter_var.set(params['perimeter_max'])
+                self.update_max_perimeter(params['perimeter_max'])
+                
+            if 'circularity_min' in params:
+                self.min_circularity_var.set(params['circularity_min'])
+                self.update_min_circularity(params['circularity_min'])
+                
+            if 'circularity_max' in params:
+                self.max_circularity_var.set(params['circularity_max'])
+                self.update_max_circularity(params['circularity_max'])
+                
+            if 'aspect_ratio_threshold' in params:
+                self.aspect_ratio_var.set(params['aspect_ratio_threshold'])
+                self.update_aspect_ratio(params['aspect_ratio_threshold'])
+                
+            if 'use_watershed' in params:
+                self.use_watershed_var.set(params['use_watershed'])
+                
+            if 'watershed_distance_threshold' in params:
+                self.watershed_distance_var.set(params['watershed_distance_threshold'])
+                self.update_watershed_distance(params['watershed_distance_threshold'])
+                
+            if 'watershed_compactness' in params:
+                self.watershed_compactness_var.set(params['watershed_compactness'])
+                self.update_watershed_compactness(params['watershed_compactness'])
+                
+            if 'watershed_min_area' in params:
+                self.watershed_min_area_var.set(params['watershed_min_area'])
+                self.update_watershed_min_area(params['watershed_min_area'])
+            
+            # Apply the loaded parameters
+            self.apply_detection_parameters()
+            
+            # Update status
+            self.status_var.set(f"Parameters loaded from {os.path.basename(param_file)}")
+            
+        except Exception as e:
+            self.status_var.set(f"Error loading parameters: {str(e)}")
+            messagebox.showerror("Error", f"Failed to load parameters: {str(e)}")
     
+    def load_parameters(self):
+        """Load detection parameters from a JSON file via dialog"""
+        try:
+            # Update status before opening dialog
+            self.status_var.set("Opening file dialog...")
+            
+            # Process all pending events to ensure UI is updated
+            self.root.update_idletasks()
+            
+            # Create a separate top-level window for the file dialog
+            dialog_root = tk.Toplevel(self.root)
+            dialog_root.withdraw()  # Hide the window
+            
+            # Default directory for parameters
+            params_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "parameters")
+            if not os.path.exists(params_dir):
+                params_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Open file dialog to select parameter file
+            param_file = filedialog.askopenfilename(
+                title="Select Parameter File",
+                initialdir=params_dir,
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                parent=dialog_root
+            )
+            
+            # Destroy the dialog root
+            dialog_root.destroy()
+            
+            if not param_file:
+                self.status_var.set("No parameter file selected")
+                return
+            
+            # Load parameters from the selected file
+            self.load_parameters_from_file(param_file)
+            
+        except Exception as e:
+            self.status_var.set(f"Error loading parameters: {str(e)}")
+            messagebox.showerror("Error", f"Failed to load parameters: {str(e)}")
+
+        
     def start_cell_detection(self):
         """Start the cell detection process"""
         # Check if AOI is defined
@@ -1758,6 +2223,8 @@ class MP4VideoLive:
                 self.create_aoi_handles()
                 # Force a frame update to create the grey mask
                 self.new_frame_available = True
+                # Update the secondary display with the new AOI
+                self.update_secondary_display()
             
             self.aoi_drawing = False
             self.aoi_adjusting = False
@@ -1771,7 +2238,7 @@ class MP4VideoLive:
         x = max(0, min(x, self.canvas.winfo_width()))
         y = max(0, min(y, self.canvas.winfo_height()))
         
-        if self.aoi_drawing:
+        if self.aoi_drawing and hasattr(self, 'aoi_coords') and hasattr(self, 'aoi_rect') and self.aoi_rect:
             # Update end coordinates while drawing - adjust for display offsets
             adjusted_x = x - self.display_offset_x
             adjusted_y = y - self.display_offset_y
@@ -1784,52 +2251,77 @@ class MP4VideoLive:
             display_x2 = self.aoi_coords[2] + self.display_offset_x
             display_y2 = self.aoi_coords[3] + self.display_offset_y
             
-            # Update rectangle with display coordinates
-            self.canvas.coords(self.aoi_rect, display_x1, display_y1, display_x2, display_y2)
+            try:
+                # Update rectangle with display coordinates
+                self.canvas.coords(self.aoi_rect, display_x1, display_y1, display_x2, display_y2)
+                
+                # Force a frame update to update the grey mask
+                self.new_frame_available = True
+                
+                # Only update secondary display occasionally during drag to avoid excessive updates
+                # This helps prevent recursion and performance issues
+                if hasattr(self, '_last_secondary_update'):
+                    current_time = time.time()
+                    if current_time - self._last_secondary_update > 0.1:  # Update at most 10 times per second
+                        self.update_secondary_display()
+                        self._last_secondary_update = current_time
+                else:
+                    self._last_secondary_update = time.time()
+            except Exception as e:
+                print(f"Error updating AOI during drag: {e}")
             
-            # Force a frame update to update the grey mask
-            self.new_frame_available = True
-            
-        elif self.aoi_adjusting and self.aoi_adjust_handle:
-            # Adjust the appropriate corner or edge - remove display offsets
-            adjusted_x = x - self.display_offset_x
-            adjusted_y = y - self.display_offset_y
-            
-            if self.aoi_adjust_handle == "nw":
-                self.aoi_coords[0] = adjusted_x
-                self.aoi_coords[1] = adjusted_y
-            elif self.aoi_adjust_handle == "ne":
-                self.aoi_coords[2] = adjusted_x
-                self.aoi_coords[1] = adjusted_y
-            elif self.aoi_adjust_handle == "se":
-                self.aoi_coords[2] = adjusted_x
-                self.aoi_coords[3] = adjusted_y
-            elif self.aoi_adjust_handle == "sw":
-                self.aoi_coords[0] = adjusted_x
-                self.aoi_coords[3] = adjusted_y
-            elif self.aoi_adjust_handle == "n":
-                self.aoi_coords[1] = adjusted_y
-            elif self.aoi_adjust_handle == "e":
-                self.aoi_coords[2] = adjusted_x
-            elif self.aoi_adjust_handle == "s":
-                self.aoi_coords[3] = adjusted_y
-            elif self.aoi_adjust_handle == "w":
-                self.aoi_coords[0] = adjusted_x
-            
-            # For display, we need to use canvas coordinates with display offsets
-            display_x1 = self.aoi_coords[0] + self.display_offset_x
-            display_y1 = self.aoi_coords[1] + self.display_offset_y
-            display_x2 = self.aoi_coords[2] + self.display_offset_x
-            display_y2 = self.aoi_coords[3] + self.display_offset_y
-            
-            # Update rectangle with display coordinates
-            self.canvas.coords(self.aoi_rect, display_x1, display_y1, display_x2, display_y2)
-            
-            # Update handles
-            self.update_handle_positions()
-            
-            # Force a frame update to update the grey mask
-            self.new_frame_available = True
+        elif self.aoi_adjusting and self.aoi_adjust_handle and hasattr(self, 'aoi_coords') and hasattr(self, 'aoi_rect') and self.aoi_rect:
+            try:
+                # Adjust the appropriate corner or edge - remove display offsets
+                adjusted_x = x - self.display_offset_x
+                adjusted_y = y - self.display_offset_y
+                
+                if self.aoi_adjust_handle == "nw":
+                    self.aoi_coords[0] = adjusted_x
+                    self.aoi_coords[1] = adjusted_y
+                elif self.aoi_adjust_handle == "ne":
+                    self.aoi_coords[2] = adjusted_x
+                    self.aoi_coords[1] = adjusted_y
+                elif self.aoi_adjust_handle == "se":
+                    self.aoi_coords[2] = adjusted_x
+                    self.aoi_coords[3] = adjusted_y
+                elif self.aoi_adjust_handle == "sw":
+                    self.aoi_coords[0] = adjusted_x
+                    self.aoi_coords[3] = adjusted_y
+                elif self.aoi_adjust_handle == "n":
+                    self.aoi_coords[1] = adjusted_y
+                elif self.aoi_adjust_handle == "e":
+                    self.aoi_coords[2] = adjusted_x
+                elif self.aoi_adjust_handle == "s":
+                    self.aoi_coords[3] = adjusted_y
+                elif self.aoi_adjust_handle == "w":
+                    self.aoi_coords[0] = adjusted_x
+                
+                # For display, we need to use canvas coordinates with display offsets
+                display_x1 = self.aoi_coords[0] + self.display_offset_x
+                display_y1 = self.aoi_coords[1] + self.display_offset_y
+                display_x2 = self.aoi_coords[2] + self.display_offset_x
+                display_y2 = self.aoi_coords[3] + self.display_offset_y
+                
+                # Update rectangle with display coordinates
+                self.canvas.coords(self.aoi_rect, display_x1, display_y1, display_x2, display_y2)
+                
+                # Update handles
+                self.update_handle_positions()
+                
+                # Force a frame update to update the grey mask
+                self.new_frame_available = True
+                
+                # Only update secondary display occasionally during drag to avoid excessive updates
+                if hasattr(self, '_last_secondary_update'):
+                    current_time = time.time()
+                    if current_time - self._last_secondary_update > 0.1:  # Update at most 10 times per second
+                        self.update_secondary_display()
+                        self._last_secondary_update = current_time
+                else:
+                    self._last_secondary_update = time.time()
+            except Exception as e:
+                print(f"Error adjusting AOI: {e}")
     
     def create_aoi_handles(self):
         """Create handles for adjusting the AOI"""
@@ -2323,15 +2815,24 @@ def get_monitor_info():
     return monitors
 
 def main():
+    # Parse command line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description='MP4 Video Live View with Cell Detection')
+    parser.add_argument('--params', '-p', type=str, help='Path to parameter JSON file to load on startup')
+    parser.add_argument('--calibration', '-c', type=str, help='Path to calibration rectangle JSON file to load on startup')
+    args = parser.parse_args()
+    
     # Get monitor information
     monitors = get_monitor_info()
     
-    # Create the root window
+    # Create root window
     root = tk.Tk()
     
-    # Position the window on the secondary monitor if available, otherwise on the primary
+    # Check for multiple monitors
     if len(monitors) > 1:
-        # Find the secondary monitor (first non-primary monitor)
+        print("Multiple monitors detected")
+        
+        # Find secondary monitor
         secondary_monitor = None
         for monitor in monitors:
             if not monitor['is_primary']:
@@ -2349,6 +2850,25 @@ def main():
     
     # Create and run the application
     app = MP4VideoLive(root)
+    
+    # Load parameters if specified
+    if args.params:
+        param_file = args.params
+        print(f"Loading parameters from: {param_file}")
+        root.after(1000, lambda: app.load_parameters_from_file(param_file))
+    
+    # Load calibration rectangles if specified
+    if args.calibration:
+        calibration_file = args.calibration
+        print(f"Loading calibration rectangles from: {calibration_file}")
+        root.after(1500, lambda: load_and_enable_calibration(app, calibration_file))
+    else:
+        # Try to load default calibration file if it exists
+        default_calibration_file = "e:/Documents/Codes/Matlab/CellToolbox/python-version/ManualShapes/rectangle_params.json"
+        if os.path.exists(default_calibration_file):
+            print(f"Loading default calibration rectangles from: {default_calibration_file}")
+            root.after(1500, lambda: load_and_enable_calibration(app, default_calibration_file))
+    
     root.mainloop()
 
 if __name__ == "__main__":
