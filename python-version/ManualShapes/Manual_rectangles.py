@@ -60,32 +60,32 @@ class Rectangle:
         self.rect.width = max(10, new_width)  # Minimum size of 10x10
         self.rect.height = max(10, new_height)
     
-    def draw(self, screen, WHITE, BLACK, YELLOW, selected):
+    def draw(self, screen, WHITE, BLACK, RED, selected):
         """Draw the rectangle on the screen"""
         if self.visible:
             # Draw filled rectangle with border
             pygame.draw.rect(screen, WHITE, self.rect)
-            pygame.draw.rect(screen, YELLOW if selected else WHITE, self.rect, 2)
+            pygame.draw.rect(screen, RED if selected else WHITE, self.rect, 2)
             
             # Display width and height in yellow text
             font = pygame.font.SysFont('Arial', 16)
             # Width text - placed below the rectangle
-            width_text = font.render(f"W: {self.rect.width}", True, YELLOW)
+            width_text = font.render(f"W: {self.rect.width}", True, RED)
             screen.blit(width_text, (self.rect.x + 5, self.rect.bottom + 2))
             # Height text - placed to the right of the rectangle
-            height_text = font.render(f"H: {self.rect.height}", True, YELLOW)
+            height_text = font.render(f"H: {self.rect.height}", True, RED)
             screen.blit(height_text, (self.rect.right + 2, self.rect.y + 5))
         else:
             # Draw just the outline for hidden rectangles
-            color = YELLOW if selected else WHITE
+            color = RED if selected else WHITE
             line_thickness = 1  # Thin line
             pygame.draw.rect(screen, color, self.rect, line_thickness)
             
             # Display width and height for hidden rectangles too
             font = pygame.font.SysFont('Arial', 16)
-            width_text = font.render(f"W: {self.rect.width}", True, YELLOW)
+            width_text = font.render(f"W: {self.rect.width}", True, RED)
             screen.blit(width_text, (self.rect.x + 5, self.rect.bottom + 2))
-            height_text = font.render(f"H: {self.rect.height}", True, YELLOW)
+            height_text = font.render(f"H: {self.rect.height}", True, RED)
             screen.blit(height_text, (self.rect.right + 2, self.rect.y + 5))
     
     def to_dict(self):
@@ -304,9 +304,9 @@ def main():
             for i in range(len(fov_corners)):
                 start_point = fov_corners[i]
                 end_point = fov_corners[(i + 1) % len(fov_corners)]
-                pygame.draw.line(screen, WHITE, 
+                pygame.draw.line(screen, RED, 
                                (int(start_point[0]), int(start_point[1])),
-                               (int(end_point[0]), int(end_point[1])), 1)
+                               (int(end_point[0]), int(end_point[1])), 2)
         
         # Handle events
         for event in pygame.event.get():
@@ -462,7 +462,7 @@ def main():
         # Draw all rectangles
         for i, rect in enumerate(rectangles):
             is_selected = (i in selected_rect_indices)
-            rect.draw(screen, WHITE, BLACK, YELLOW, is_selected)
+            rect.draw(screen, WHITE, BLACK, RED, is_selected)
         
         # Display instructions
         instructions = [
@@ -484,7 +484,7 @@ def main():
         
         y_offset = 10
         for instruction in instructions:
-            text_surface = small_font.render(instruction, True, WHITE)
+            text_surface = small_font.render(instruction, True, RED)
             screen.blit(text_surface, (10, y_offset))
             y_offset += 20
         

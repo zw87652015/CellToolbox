@@ -75,7 +75,7 @@ class MP4VideoLive:
         self.cell_detector = CellDetector()
         self.cell_detection_active = False
         self.cell_detection_thread = None
-        self.cell_detection_interval = 0.05  # 10 FPS for cell detection
+        self.cell_detection_interval = 0.05  # 20 FPS for cell detection
         self.last_detection_time = 0
         self.detected_cells = []
         self.detection_result_image = None
@@ -1609,9 +1609,12 @@ class MP4VideoLive:
             while self.cell_detection_active and self.running:
                 current_time = time.time()
                 
-                # Process at the specified interval (10 FPS)
+                # Process at the specified interval
                 if current_time - self.last_detection_time >= self.cell_detection_interval:
                     self.last_detection_time = current_time
+                    
+                    # Start timing the detection cycle
+                    detection_start_time = time.time()
                     
                     # Get the current frame
                     with self.frame_lock:
@@ -1628,14 +1631,18 @@ class MP4VideoLive:
                     # This will remove the display offsets and apply proper scaling
                     scaled_aoi_coords = self.scale_aoi_to_original(display_coords)
                     
-                    # Log the coordinates for debugging
-                    print(f"Cell detection using AOI: {scaled_aoi_coords}")
-                    
                     # Detect cells in the AOI
                     self.detected_cells, result_image = self.cell_detector.detect_cells(frame, scaled_aoi_coords)
                     
-                    # Update the cell count display
-                    self.cell_count_var.set(f"Cells: {len(self.detected_cells)}")
+                    # Calculate detection time
+                    detection_end_time = time.time()
+                    detection_time_ms = (detection_end_time - detection_start_time) * 1000  # Convert to milliseconds
+                    
+                    # Log the coordinates and timing information
+                    print(f"Cell detection using AOI: {scaled_aoi_coords} - Time: {detection_time_ms:.2f} ms")
+                    
+                    # Update the cell count display with timing information
+                    self.cell_count_var.set(f"Cells: {len(self.detected_cells)} - Time: {detection_time_ms:.2f} ms")
                     
                     # Update the detection result display
                     self.update_detection_display(result_image)
@@ -1661,8 +1668,28 @@ class MP4VideoLive:
         if canvas_width <= 1 or canvas_height <= 1:
             return
         
+        # Store the result image for processing on the main thread
+        # This reduces thread contention and makes updates smoother
+        self.detection_result_image = result_image.copy()
+        
+        # Schedule the update on the main thread with a slight delay to reduce flashing
+        # Use after instead of after_idle to better control the update rate
+        self.root.after(50, self._update_detection_canvas)
+    
+    def _update_detection_canvas(self):
+        """Update the detection canvas (called on the main thread)"""
+        if self.detection_result_image is None or self.detection_canvas is None:
+            return
+        
+        canvas_width = self.detection_canvas.winfo_width()
+        canvas_height = self.detection_canvas.winfo_height()
+        
+        # Skip if canvas is not yet properly sized
+        if canvas_width <= 1 or canvas_height <= 1:
+            return
+            
         # Resize the result image to fit the canvas
-        aspect_ratio = result_image.shape[1] / result_image.shape[0]
+        aspect_ratio = self.detection_result_image.shape[1] / self.detection_result_image.shape[0]
         
         if canvas_width / canvas_height > aspect_ratio:
             display_height = canvas_height
@@ -1672,35 +1699,28 @@ class MP4VideoLive:
             display_height = int(display_width / aspect_ratio)
         
         # Resize the image
-        display_image = cv2.resize(result_image, (display_width, display_height))
-        
-        # Convert to PhotoImage
-        img = Image.fromarray(display_image)
-        self.detection_result_photo = ImageTk.PhotoImage(image=img)
-        
-        # Update the canvas
-        self.root.after_idle(self._update_detection_canvas)
-    
-    def _update_detection_canvas(self):
-        """Update the detection canvas (called on the main thread)"""
-        if self.detection_result_photo is None:
-            return
-        
-        canvas_width = self.detection_canvas.winfo_width()
-        canvas_height = self.detection_canvas.winfo_height()
-        
-        # If this is the first image, create the image on the canvas
-        if not self.detection_canvas.find_withtag("result"):
-            self.detection_canvas.create_image(
-                canvas_width//2, 
-                canvas_height//2, 
-                anchor=tk.CENTER, 
-                image=self.detection_result_photo,
-                tags=("result",)
-            )
-        else:
-            # Update the existing image
-            self.detection_canvas.itemconfig("result", image=self.detection_result_photo)
+        try:
+            display_image = cv2.resize(self.detection_result_image, (display_width, display_height))
+            
+            # Convert to PhotoImage
+            img = Image.fromarray(display_image)
+            self.detection_result_photo = ImageTk.PhotoImage(image=img)
+            
+            # If this is the first image, create the image on the canvas
+            if not self.detection_canvas.find_withtag("result"):
+                self.detection_canvas.create_image(
+                    canvas_width//2, 
+                    canvas_height//2, 
+                    anchor=tk.CENTER, 
+                    image=self.detection_result_photo,
+                    tags=("result",)
+                )
+            else:
+                # Update the existing image
+                self.detection_canvas.itemconfig("result", image=self.detection_result_photo)
+        except Exception as e:
+            print(f"Error updating detection canvas: {str(e)}")
+            # Don't attempt to update again immediately if there was an error
     
     def on_canvas_click(self, event):
         """Handle mouse click on canvas"""
