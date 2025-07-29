@@ -14,6 +14,7 @@ import time
 from camera_manager import CameraManager
 from cell_detector_gpu import CellDetectorGPU  # Use GPU version
 from aoi_manager import AOIManager
+from adaptive_cell_tracker import AdaptiveCellTracker
 
 class USBCameraLiveGPU:
     """Main application class for GPU-accelerated USB camera live stream with cell detection"""
@@ -26,6 +27,11 @@ class USBCameraLiveGPU:
         # Initialize components
         self.camera_manager = CameraManager()
         self.cell_detector = CellDetectorGPU()  # Use GPU version
+        self.cell_tracker = AdaptiveCellTracker(
+            max_disappeared=0,  # Reduced from 15 to 5 frames for faster cleanup
+            base_search_radius=50,
+            min_track_length=3
+        )
         # AOI manager will be initialized after UI setup
         
         # Application state
@@ -35,6 +41,12 @@ class USBCameraLiveGPU:
         self.fullscreen = False
         self.debug_window = None
         self.debug_window_open = False
+        
+        # Tracking state
+        self.tracking_enabled = True
+        self.show_trajectories = False
+        self.tracked_cells = {}
+        self.show_predictions = False
         
         # Display settings - Will be set dynamically based on canvas size
         self.display_width = 800  # Initial fallback value
@@ -186,9 +198,43 @@ class USBCameraLiveGPU:
         aoi_clear_btn.pack(side=tk.RIGHT, padx=(5,0))
         
         # Debug window button
-        debug_btn = tk.Button(detection_frame, text="Show Debug Window", 
+        debug_btn = tk.Button(detection_frame, text="Debug Window", 
                             command=self.toggle_debug_window)
         debug_btn.pack(pady=5)
+        
+        # Tracking Controls
+        tracking_frame = tk.LabelFrame(self.control_panel, text="Tracking Controls", 
+                                     bg='gray20', fg='white')
+        tracking_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Tracking toggle
+        self.tracking_var = tk.BooleanVar(value=True)
+        tracking_check = tk.Checkbutton(tracking_frame, text="Enable Tracking", 
+                                       variable=self.tracking_var,
+                                       command=self.toggle_tracking,
+                                       bg='gray20', fg='white', selectcolor='gray30')
+        tracking_check.pack(pady=2)
+        
+        # Trajectory toggle
+        self.trajectory_var = tk.BooleanVar()
+        trajectory_check = tk.Checkbutton(tracking_frame, text="Show Trajectories", 
+                                         variable=self.trajectory_var,
+                                         command=self.toggle_trajectories,
+                                         bg='gray20', fg='white', selectcolor='gray30')
+        trajectory_check.pack(pady=2)
+        
+        # Predictions toggle
+        self.predictions_var = tk.BooleanVar()
+        predictions_check = tk.Checkbutton(tracking_frame, text="Show Predictions", 
+                                          variable=self.predictions_var,
+                                          command=self.toggle_predictions,
+                                          bg='gray20', fg='white', selectcolor='gray30')
+        predictions_check.pack(pady=2)
+        
+        # Tracking statistics label
+        self.tracking_stats_label = tk.Label(tracking_frame, text="Tracking Stats: Ready", 
+                                            bg='gray20', fg='cyan', font=('Arial', 9))
+        self.tracking_stats_label.pack(pady=2)
         
         # Performance monitoring
         perf_frame = tk.LabelFrame(self.control_panel, text="Performance", 
@@ -352,23 +398,87 @@ class USBCameraLiveGPU:
                         detected_cells = self.cell_detector.detect_cells(
                             frame_to_process, aoi_coords)
                     
-                    # Store detection results
-                    self.cell_detector.detected_cells = detected_cells
-                    
-                    # Update detection count
-                    self.root.after(0, lambda: self.detection_count_label.config(
-                        text=f"Cells: {len(detected_cells)}"))
-                    
-                    # Debug output
-                    if len(detected_cells) > 0:
-                        print(f"GPU Detection: Found {len(detected_cells)} cells")
+                    # Process detections through adaptive tracker
+                    if self.tracking_enabled:
+                        # Convert detection format for tracker
+                        tracker_detections = []
+                        for cell in detected_cells:
+                            # Handle dictionary format from GPU detector
+                            if isinstance(cell, dict):
+                                # Get centroid and bbox from detection (in AOI space)
+                                aoi_centroid = cell['centroid']
+                                aoi_bbox = cell['bbox']  # (x1, y1, x2, y2)
+                                aoi_offset = cell.get('aoi_offset', (0, 0))
+                                
+                                # Convert to original image space for tracking
+                                centroid = (aoi_centroid[0] + aoi_offset[0], aoi_centroid[1] + aoi_offset[1])
+                                
+                                # Convert bbox to original image space and (x, y, w, h) format
+                                x1, y1, x2, y2 = aoi_bbox
+                                orig_x1 = x1 + aoi_offset[0]
+                                orig_y1 = y1 + aoi_offset[1]
+                                orig_x2 = x2 + aoi_offset[0]
+                                orig_y2 = y2 + aoi_offset[1]
+                                tracker_bbox = (orig_x1, orig_y1, orig_x2 - orig_x1, orig_y2 - orig_y1)
+                            else:
+                                # Handle legacy tuple format (x, y, w, h)
+                                x, y, w, h = cell
+                                centroid = (x + w/2, y + h/2)
+                                tracker_bbox = (x, y, w, h)
+                            
+                            tracker_detections.append({
+                                'centroid': centroid,
+                                'bbox': tracker_bbox
+                            })
+                        
+                        # Update tracker
+                        self.tracked_cells = self.cell_tracker.update(tracker_detections)
+                        
+                        # Store tracking results for visualization
+                        self.cell_detector.detected_cells = detected_cells
+                        
+                        # Update UI with tracking info
+                        active_tracks = len(self.tracked_cells)
+                        total_detections = len(detected_cells)
+                        stats = self.cell_tracker.get_statistics()
+                        
+                        self.root.after(0, lambda: self.detection_count_label.config(
+                            text=f"Cells: {total_detections} | Tracks: {active_tracks} | Total: {stats['total_tracked']}"))
+                        
+                        # Update tracking statistics
+                        disappeared_tracks = stats['disappeared_tracks']
+                        self.root.after(0, lambda: self.tracking_stats_label.config(
+                            text=f"Active: {active_tracks} | Missing: {disappeared_tracks} | Frame: {stats['frame_number']}"))
+                        
+                        # Debug output
+                        if len(detected_cells) > 0:
+                            print(f"GPU Detection: Found {len(detected_cells)} cells, {active_tracks} active tracks")
+                            # Print first few ACTIVE tracked cells for debugging (only those currently detected)
+                            active_tracks_debug = [(cell_id, track_info) for cell_id, track_info in self.tracked_cells.items() 
+                                                  if track_info['disappeared_count'] == 0]
+                            for i, (cell_id, track_info) in enumerate(active_tracks_debug[:3]):
+                                centroid = track_info['centroid']
+                                confidence = track_info['confidence']
+                                velocity = track_info.get('velocity', (0, 0))
+                                print(f"  Active Track {cell_id}: pos=({centroid[0]:.1f},{centroid[1]:.1f}) conf={confidence:.2f} vel=({velocity[0]:.1f},{velocity[1]:.1f})")
+                    else:
+                        # Store detection results without tracking
+                        self.cell_detector.detected_cells = detected_cells
+                        
+                        # Update detection count
+                        self.root.after(0, lambda: self.detection_count_label.config(
+                            text=f"Cells: {len(detected_cells)}"))
+                        
+                        # Debug output
+                        if len(detected_cells) > 0:
+                            print(f"GPU Detection: Found {len(detected_cells)} cells")
                         
                 except Exception as e:
                     print(f"Detection error: {e}")
                     import traceback
                     traceback.print_exc()
             
-            time.sleep(1/50)  # 50 FPS for detection
+            time.sleep(1/30)  # 30 FPS for detection
     
     def render_loop(self):
         """Rendering loop - 60 FPS"""
@@ -427,9 +537,12 @@ class USBCameraLiveGPU:
         if self.show_aoi and self.aoi_manager and self.aoi_manager.has_aoi():
             final_frame = self.aoi_manager.apply_aoi_overlay_with_offset(final_frame, display_offset_x, display_offset_y)
         
-        # Draw detected cells
-        if self.detection_enabled and hasattr(self.cell_detector, 'detected_cells') and self.cell_detector.detected_cells:
-            self.draw_detected_cells(final_frame, frame_width, frame_height, display_offset_x, display_offset_y, actual_display_width, actual_display_height)
+        # Draw detected cells with tracking
+        if self.detection_enabled:
+            if self.tracking_enabled and self.tracked_cells:
+                self.draw_tracked_cells(final_frame, frame_width, frame_height, display_offset_x, display_offset_y, actual_display_width, actual_display_height)
+            elif hasattr(self.cell_detector, 'detected_cells') and self.cell_detector.detected_cells:
+                self.draw_detected_cells(final_frame, frame_width, frame_height, display_offset_x, display_offset_y, actual_display_width, actual_display_height)
         
         return final_frame
     
@@ -525,6 +638,126 @@ class USBCameraLiveGPU:
         except Exception as e:
             print(f"Error in draw_detected_cells: {e}")
     
+    def draw_tracked_cells(self, display_frame, original_width, original_height, display_offset_x, display_offset_y, actual_display_width, actual_display_height):
+        """Draw tracked cells with IDs, trajectories, and predictions"""
+        try:
+            # Calculate scaling factors
+            scale_x = actual_display_width / original_width
+            scale_y = actual_display_height / original_height
+            
+            # Get trajectories if enabled
+            trajectories = {}
+            if self.show_trajectories:
+                trajectories = self.cell_tracker.get_track_trajectories(min_length=3)
+            
+            # Draw each tracked cell
+            for cell_id, track_info in self.tracked_cells.items():
+                try:
+                    centroid = track_info['centroid']
+                    bbox = track_info['bbox']
+                    confidence = track_info['confidence']
+                    disappeared_count = track_info['disappeared_count']
+                    predicted_pos = track_info.get('predicted_position', centroid)
+                    velocity = track_info.get('velocity', (0, 0))
+                    search_radius = track_info.get('search_radius', 50)
+                    
+                    # Transform coordinates to display space
+                    # Note: tracked coordinates are already in original image space
+                    display_x = int(centroid[0] * scale_x) + display_offset_x
+                    display_y = int(centroid[1] * scale_y) + display_offset_y
+                    
+                    # Transform bounding box
+                    x, y, w, h = bbox
+                    bbox_x1 = int(x * scale_x) + display_offset_x
+                    bbox_y1 = int(y * scale_y) + display_offset_y
+                    bbox_x2 = int((x + w) * scale_x) + display_offset_x
+                    bbox_y2 = int((y + h) * scale_y) + display_offset_y
+                    
+                    # Clamp to video frame boundaries
+                    video_x1 = display_offset_x
+                    video_y1 = display_offset_y
+                    video_x2 = display_offset_x + actual_display_width
+                    video_y2 = display_offset_y + actual_display_height
+                    
+                    # Check if cell is within frame
+                    if (video_x1 <= display_x <= video_x2 and video_y1 <= display_y <= video_y2):
+                        # Choose colors based on track state
+                        if disappeared_count > 0:
+                            # Disappeared track - red/orange
+                            color = (0, 100, 255)  # Orange
+                            text_color = (0, 100, 255)
+                        else:
+                            # Active track - green/blue based on confidence
+                            intensity = int(255 * confidence)
+                            color = (0, intensity, 255 - intensity)  # Green to yellow
+                            text_color = (0, 255, 0)
+                        
+                        # Draw bounding box
+                        thickness = 3 if disappeared_count == 0 else 1
+                        cv2.rectangle(display_frame, (bbox_x1, bbox_y1), (bbox_x2, bbox_y2), color, thickness)
+                        
+                        # Draw centroid
+                        cv2.circle(display_frame, (display_x, display_y), 4, color, -1)
+                        
+                        # Draw cell ID and info
+                        label = f"ID:{cell_id}"
+                        if disappeared_count > 0:
+                            label += f" (miss:{disappeared_count})"
+                        
+                        # Add confidence and velocity info
+                        info_label = f"C:{confidence:.2f} V:({velocity[0]:.1f},{velocity[1]:.1f})"
+                        
+                        # Draw labels
+                        cv2.putText(display_frame, label, 
+                                   (bbox_x1, bbox_y1 - 25), cv2.FONT_HERSHEY_SIMPLEX, 
+                                   0.6, text_color, 2)
+                        cv2.putText(display_frame, info_label, 
+                                   (bbox_x1, bbox_y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 
+                                   0.4, text_color, 1)
+                        
+                        # Draw prediction if enabled and different from current position
+                        if self.show_predictions and predicted_pos != centroid:
+                            pred_x = int(predicted_pos[0] * scale_x) + display_offset_x
+                            pred_y = int(predicted_pos[1] * scale_y) + display_offset_y
+                            
+                            if (video_x1 <= pred_x <= video_x2 and video_y1 <= pred_y <= video_y2):
+                                # Draw prediction point
+                                cv2.circle(display_frame, (pred_x, pred_y), 3, (255, 255, 0), 1)
+                                # Draw line from current to predicted position
+                                cv2.line(display_frame, (display_x, display_y), (pred_x, pred_y), (255, 255, 0), 1)
+                        
+                        # Draw search radius if enabled
+                        if self.show_predictions:
+                            radius_display = int(search_radius * min(scale_x, scale_y))
+                            cv2.circle(display_frame, (display_x, display_y), radius_display, (100, 100, 100), 1)
+                        
+                        # Draw trajectory if enabled
+                        if self.show_trajectories and cell_id in trajectories:
+                            trajectory = trajectories[cell_id]
+                            points = trajectory['points']
+                            if len(points) > 1:
+                                # Convert trajectory points to display coordinates
+                                display_points = []
+                                for point in points[-20:]:  # Show last 20 points
+                                    traj_x = int(point[0] * scale_x) + display_offset_x
+                                    traj_y = int(point[1] * scale_y) + display_offset_y
+                                    if (video_x1 <= traj_x <= video_x2 and video_y1 <= traj_y <= video_y2):
+                                        display_points.append((traj_x, traj_y))
+                                
+                                # Draw trajectory lines
+                                if len(display_points) > 1:
+                                    for i in range(1, len(display_points)):
+                                        alpha = i / len(display_points)  # Fade effect
+                                        traj_color = (int(100 * alpha), int(100 * alpha), int(255 * alpha))
+                                        cv2.line(display_frame, display_points[i-1], display_points[i], traj_color, 1)
+                                        
+                except Exception as e:
+                    print(f"Error drawing tracked cell {cell_id}: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Error in draw_tracked_cells: {e}")
+    
     def update_display(self, display_frame):
         """Update the video display on Canvas"""
         try:
@@ -595,6 +828,24 @@ class USBCameraLiveGPU:
             self.close_debug_window()
         else:
             self.open_debug_window()
+    
+    def toggle_tracking(self):
+        """Toggle cell tracking"""
+        self.tracking_enabled = self.tracking_var.get()
+        if not self.tracking_enabled:
+            # Clear existing tracks when disabling
+            self.tracked_cells = {}
+        print(f"Tracking {'enabled' if self.tracking_enabled else 'disabled'}")
+    
+    def toggle_trajectories(self):
+        """Toggle trajectory visualization"""
+        self.show_trajectories = self.trajectory_var.get()
+        print(f"Trajectories {'enabled' if self.show_trajectories else 'disabled'}")
+    
+    def toggle_predictions(self):
+        """Toggle prediction visualization"""
+        self.show_predictions = self.predictions_var.get()
+        print(f"Predictions {'enabled' if self.show_predictions else 'disabled'}")
     
     def open_debug_window(self):
         """Open debug window"""
