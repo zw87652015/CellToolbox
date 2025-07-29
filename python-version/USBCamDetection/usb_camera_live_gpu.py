@@ -36,9 +36,9 @@ class USBCameraLiveGPU:
         self.debug_window = None
         self.debug_window_open = False
         
-        # Display settings
-        self.display_width = 1200
-        self.display_height = 900
+        # Display settings - Will be set dynamically based on canvas size
+        self.display_width = 800  # Initial fallback value
+        self.display_height = 600  # Initial fallback value
         
         # Threading
         self.capture_thread = None
@@ -70,6 +70,31 @@ class USBCameraLiveGPU:
         # Start camera
         self.start_camera()
     
+    def update_display_dimensions(self):
+        """Update display dimensions based on actual canvas size"""
+        try:
+            # Force canvas to update its geometry
+            self.video_canvas.update_idletasks()
+            
+            # Get actual canvas dimensions
+            canvas_width = self.video_canvas.winfo_width()
+            canvas_height = self.video_canvas.winfo_height()
+            
+            # Only update if we got valid dimensions
+            if canvas_width > 1 and canvas_height > 1:
+                self.display_width = canvas_width
+                self.display_height = canvas_height
+                print(f"Updated display dimensions to: {self.display_width}x{self.display_height}")
+            else:
+                # Retry after a short delay if dimensions aren't ready
+                self.root.after(100, self.update_display_dimensions)
+                
+        except Exception as e:
+            print(f"Error updating display dimensions: {e}")
+            # Use fallback dimensions
+            self.display_width = 800
+            self.display_height = 600
+    
     def setup_ui(self):
         """Setup the user interface"""
         # Main container
@@ -95,6 +120,9 @@ class USBCameraLiveGPU:
         self.root.bind("<KeyPress-c>", self.clear_aoi_keyboard)  # 'C' key to clear AOI
         self.root.bind("<KeyPress-r>", self.reset_aoi_keyboard)  # 'R' key to reset AOI
         self.root.focus_set()
+        
+        # Update display dimensions after UI is set up
+        self.root.after(100, self.update_display_dimensions)
     
     def setup_control_panel(self):
         """Setup the control panel with GPU status"""
@@ -340,7 +368,7 @@ class USBCameraLiveGPU:
                     import traceback
                     traceback.print_exc()
             
-            time.sleep(1/10)  # 10 FPS for detection
+            time.sleep(1/50)  # 50 FPS for detection
     
     def render_loop(self):
         """Rendering loop - 60 FPS"""
@@ -401,16 +429,16 @@ class USBCameraLiveGPU:
         
         # Draw detected cells
         if self.detection_enabled and hasattr(self.cell_detector, 'detected_cells') and self.cell_detector.detected_cells:
-            self.draw_detected_cells(final_frame, frame_width, frame_height, display_offset_x, display_offset_y)
+            self.draw_detected_cells(final_frame, frame_width, frame_height, display_offset_x, display_offset_y, actual_display_width, actual_display_height)
         
         return final_frame
     
-    def draw_detected_cells(self, display_frame, original_width, original_height, display_offset_x, display_offset_y):
+    def draw_detected_cells(self, display_frame, original_width, original_height, display_offset_x, display_offset_y, actual_display_width, actual_display_height):
         """Draw detected cells on display frame with proper coordinate transformation"""
         try:
-            # Calculate scaling factors from original image to display size
-            scale_x = self.display_width / original_width
-            scale_y = self.display_height / original_height
+            # Calculate scaling factors using ACTUAL video display size (not full canvas)
+            scale_x = actual_display_width / original_width
+            scale_y = actual_display_height / original_height
             
             detected_cells = self.cell_detector.detected_cells
             if not detected_cells:
@@ -432,30 +460,63 @@ class USBCameraLiveGPU:
                     centroid = cell.get('centroid')
                     bbox = cell.get('bbox')
                     area = cell.get('area', 0)
+                    aoi_offset = cell.get('aoi_offset', (0, 0))
                     
                     if not centroid or not bbox:
                         print(f"Warning: cell {i} missing centroid or bbox")
                         continue
                     
-                    # Transform coordinates from original image space to display space
-                    # Then add display offset to position on final frame
-                    centroid_x = int(centroid[0] * scale_x) + display_offset_x
-                    centroid_y = int(centroid[1] * scale_y) + display_offset_y
-                    bbox_x1 = int(bbox[0] * scale_x) + display_offset_x
-                    bbox_y1 = int(bbox[1] * scale_y) + display_offset_y
-                    bbox_x2 = int(bbox[2] * scale_x) + display_offset_x
-                    bbox_y2 = int(bbox[3] * scale_y) + display_offset_y
+                    # Detection results are in AOI/cropped space
+                    # First adjust to original image coordinates, then scale to display
+                    orig_centroid_x = centroid[0] + aoi_offset[0]
+                    orig_centroid_y = centroid[1] + aoi_offset[1]
+                    orig_bbox_x1 = bbox[0] + aoi_offset[0]
+                    orig_bbox_y1 = bbox[1] + aoi_offset[1]
+                    orig_bbox_x2 = bbox[2] + aoi_offset[0]
+                    orig_bbox_y2 = bbox[3] + aoi_offset[1]
                     
-                    # Draw centroid
-                    cv2.circle(display_frame, (centroid_x, centroid_y), 3, (0, 255, 0), -1)
+                    # Scale to display size and add display offset
+                    centroid_x = int(orig_centroid_x * scale_x) + display_offset_x
+                    centroid_y = int(orig_centroid_y * scale_y) + display_offset_y
+                    bbox_x1 = int(orig_bbox_x1 * scale_x) + display_offset_x
+                    bbox_y1 = int(orig_bbox_y1 * scale_y) + display_offset_y
+                    bbox_x2 = int(orig_bbox_x2 * scale_x) + display_offset_x
+                    bbox_y2 = int(orig_bbox_y2 * scale_y) + display_offset_y
                     
-                    # Draw bounding box
-                    cv2.rectangle(display_frame, (bbox_x1, bbox_y1), (bbox_x2, bbox_y2), (255, 0, 0), 2)
+                    # Clamp coordinates to video frame boundaries
+                    video_x1 = display_offset_x
+                    video_y1 = display_offset_y
+                    video_x2 = display_offset_x + int(original_width * scale_x)
+                    video_y2 = display_offset_y + int(original_height * scale_y)
                     
-                    # Draw area label
-                    cv2.putText(display_frame, f"{int(area)}", 
-                               (bbox_x1, bbox_y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 
-                               0.5, (255, 255, 255), 1)
+                    # Only draw if detection is within video frame area
+                    if (video_x1 <= centroid_x <= video_x2 and video_y1 <= centroid_y <= video_y2):
+                        # Clamp all coordinates to video frame
+                        centroid_x = max(video_x1, min(centroid_x, video_x2))
+                        centroid_y = max(video_y1, min(centroid_y, video_y2))
+                        bbox_x1 = max(video_x1, min(bbox_x1, video_x2))
+                        bbox_y1 = max(video_y1, min(bbox_y1, video_y2))
+                        bbox_x2 = max(video_x1, min(bbox_x2, video_x2))
+                        bbox_y2 = max(video_y1, min(bbox_y2, video_y2))
+                    
+                        # Debug: Print coordinate transformation for first few cells
+                        if i < 3:
+                            print(f"Cell {i}: AOI=({centroid[0]:.1f},{centroid[1]:.1f}) + offset{aoi_offset} = orig=({orig_centroid_x:.1f},{orig_centroid_y:.1f}) -> display=({centroid_x},{centroid_y}) [WITHIN FRAME]")
+                        
+                        # Draw centroid
+                        cv2.circle(display_frame, (centroid_x, centroid_y), 3, (0, 255, 0), -1)
+                        
+                        # Draw bounding box
+                        cv2.rectangle(display_frame, (bbox_x1, bbox_y1), (bbox_x2, bbox_y2), (255, 0, 0), 2)
+                        
+                        # Draw area label
+                        cv2.putText(display_frame, f"{int(area)}", 
+                                   (bbox_x1, bbox_y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 
+                                   0.5, (255, 255, 255), 1)
+                    else:
+                        # Debug: Print when detection is outside video frame
+                        if i < 3:
+                            print(f"Cell {i}: AOI=({centroid[0]:.1f},{centroid[1]:.1f}) + offset{aoi_offset} = orig=({orig_centroid_x:.1f},{orig_centroid_y:.1f}) -> display=({centroid_x},{centroid_y}) [OUTSIDE FRAME - SKIPPED]")
                                
                 except Exception as e:
                     print(f"Error drawing cell {i}: {e}")

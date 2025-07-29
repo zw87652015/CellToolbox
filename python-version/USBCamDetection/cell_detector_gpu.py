@@ -318,22 +318,21 @@ class CellDetectorGPU:
                 self.min_circularity * 0.8 < circularity < self.max_circularity * 1.2 and
                 aspect_ratio_condition):
                     
-                    # Calculate centroid
+                    # Calculate centroid (keep in AOI/cropped image space)
                     y, x = prop.centroid
                     
-                    # Adjust coordinates back to original image space if AOI was used
-                    adjusted_centroid = (x + x1, y + y1)
-                    
                     # Convert bbox from (min_row, min_col, max_row, max_col) to (x1, y1, x2, y2)
-                    adjusted_bbox = (bbox[1] + x1, bbox[0] + y1, bbox[3] + x1, bbox[2] + y1)
+                    # Keep coordinates in AOI/cropped image space - don't adjust back to original
+                    cell_bbox = (bbox[1], bbox[0], bbox[3], bbox[2])
                     
                     detected_cells.append({
-                        'centroid': adjusted_centroid,
+                        'centroid': (x, y),
                         'area': area,
-                        'bbox': adjusted_bbox,
+                        'bbox': cell_bbox,
                         'perimeter': perimeter,
                         'circularity': circularity,
-                        'eccentricity': eccentricity
+                        'eccentricity': eccentricity,
+                        'aoi_offset': (x1, y1) if aoi_coords else (0, 0)  # Store AOI offset for later use
                     })
         
         # Store results

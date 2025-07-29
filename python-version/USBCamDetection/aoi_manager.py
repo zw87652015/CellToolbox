@@ -69,29 +69,59 @@ class AOIManager:
         
         return "AOI cleared"
     
+    def _is_within_video_frame(self, x, y):
+        """Check if coordinates are within the video frame area (not the full canvas)"""
+        if not hasattr(self, 'display_offset_x') or not hasattr(self, 'display_offset_y'):
+            return True  # Allow if display properties not set yet
+        
+        # Video frame boundaries within the canvas
+        video_x1 = self.display_offset_x
+        video_y1 = self.display_offset_y
+        video_x2 = self.display_offset_x + self.display_width
+        video_y2 = self.display_offset_y + self.display_height
+        
+        return video_x1 <= x <= video_x2 and video_y1 <= y <= video_y2
+    
+    def _clamp_to_video_frame_x(self, x):
+        """Clamp X coordinate to video frame boundaries"""
+        if not hasattr(self, 'display_offset_x'):
+            return x
+        
+        video_x1 = self.display_offset_x
+        video_x2 = self.display_offset_x + self.display_width
+        return max(video_x1, min(x, video_x2))
+    
+    def _clamp_to_video_frame_y(self, y):
+        """Clamp Y coordinate to video frame boundaries"""
+        if not hasattr(self, 'display_offset_y'):
+            return y
+        
+        video_y1 = self.display_offset_y
+        video_y2 = self.display_offset_y + self.display_height
+        return max(video_y1, min(y, video_y2))
+    
     def on_canvas_click(self, event):
         """Handle canvas click events for AOI drawing"""
         if not self.aoi_active:
             return None
         
+        # Check if click is within video frame area
+        if not self._is_within_video_frame(event.x, event.y):
+            return "Click within video frame to draw AOI"
+        
         # Start drawing new AOI
         self.aoi_drawing = True
         
-        # Remove display offsets to get coordinates relative to the actual image
-        adjusted_x = event.x - self.display_offset_x
-        adjusted_y = event.y - self.display_offset_y
-        
-        self.aoi_coords = [adjusted_x, adjusted_y, adjusted_x, adjusted_y]
+        # Store canvas coordinates directly
+        self.aoi_coords = [event.x, event.y, event.x, event.y]
         
         # Clear existing AOI
         if self.aoi_rect:
             self.canvas.delete(self.aoi_rect)
         
-        # Create new rectangle with display offsets applied
-        display_x = event.x
-        display_y = event.y
+        # Create new rectangle using canvas coordinates directly
         self.aoi_rect = self.canvas.create_rectangle(
-            display_x, display_y, display_x, display_y,
+            event.x, event.y, event.x, event.y,
             outline="red", width=2, fill="", tags=("aoi",)
         )
         
@@ -102,21 +132,18 @@ class AOIManager:
         if not self.aoi_drawing or not self.aoi_rect:
             return None
         
-        # Remove display offsets
-        adjusted_x = event.x - self.display_offset_x
-        adjusted_y = event.y - self.display_offset_y
+        # Clamp coordinates to video frame area
+        clamped_x = self._clamp_to_video_frame_x(event.x)
+        clamped_y = self._clamp_to_video_frame_y(event.y)
         
-        # Update AOI coordinates
-        self.aoi_coords[2] = adjusted_x
-        self.aoi_coords[3] = adjusted_y
+        # Update AOI coordinates with clamped values
+        self.aoi_coords[2] = clamped_x
+        self.aoi_coords[3] = clamped_y
         
-        # Update rectangle with display coordinates
-        display_x1 = self.aoi_coords[0] + self.display_offset_x
-        display_y1 = self.aoi_coords[1] + self.display_offset_y
-        display_x2 = event.x
-        display_y2 = event.y
-        
-        self.canvas.coords(self.aoi_rect, display_x1, display_y1, display_x2, display_y2)
+        # Update rectangle using clamped coordinates
+        self.canvas.coords(self.aoi_rect, 
+                          self.aoi_coords[0], self.aoi_coords[1], 
+                          self.aoi_coords[2], self.aoi_coords[3])
         
         return "AOI being drawn"
     
@@ -127,18 +154,30 @@ class AOIManager:
         
         self.aoi_drawing = False
         
+        # Update final coordinates with clamping to video frame
+        self.aoi_coords[2] = self._clamp_to_video_frame_x(event.x)
+        self.aoi_coords[3] = self._clamp_to_video_frame_y(event.y)
+        
         # Ensure coordinates are properly ordered
         if self.aoi_coords[0] > self.aoi_coords[2]:
             self.aoi_coords[0], self.aoi_coords[2] = self.aoi_coords[2], self.aoi_coords[0]
         if self.aoi_coords[1] > self.aoi_coords[3]:
             self.aoi_coords[1], self.aoi_coords[3] = self.aoi_coords[3], self.aoi_coords[1]
         
-        # Scale coordinates to original image size
+        # Convert from canvas coordinates to original image coordinates
+        # First remove display offset, then scale to original image size
         if self.display_width > 0 and self.display_height > 0:
-            x1_orig = int(self.aoi_coords[0] * (self.frame_width / self.display_width))
-            y1_orig = int(self.aoi_coords[1] * (self.frame_height / self.display_height))
-            x2_orig = int(self.aoi_coords[2] * (self.frame_width / self.display_width))
-            y2_orig = int(self.aoi_coords[3] * (self.frame_height / self.display_height))
+            # Remove display offset to get coordinates relative to the displayed image
+            x1_display = self.aoi_coords[0] - self.display_offset_x
+            y1_display = self.aoi_coords[1] - self.display_offset_y
+            x2_display = self.aoi_coords[2] - self.display_offset_x
+            y2_display = self.aoi_coords[3] - self.display_offset_y
+            
+            # Scale to original image size
+            x1_orig = int(x1_display * (self.frame_width / self.display_width))
+            y1_orig = int(y1_display * (self.frame_height / self.display_height))
+            x2_orig = int(x2_display * (self.frame_width / self.display_width))
+            y2_orig = int(y2_display * (self.frame_height / self.display_height))
             
             # Ensure coordinates are within image bounds
             x1_orig = max(0, min(x1_orig, self.frame_width - 1))
@@ -146,6 +185,7 @@ class AOIManager:
             x2_orig = max(0, min(x2_orig, self.frame_width - 1))
             y2_orig = max(0, min(y2_orig, self.frame_height - 1))
             
+            # Store the original image coordinates for detection
             self.aoi_coords = [x1_orig, y1_orig, x2_orig, y2_orig]
             
             return f"AOI set: ({x1_orig},{y1_orig}) to ({x2_orig},{y2_orig})"
