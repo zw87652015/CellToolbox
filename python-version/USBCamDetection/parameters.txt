@@ -1,0 +1,33 @@
+CLAHE
+Clip limit 1.5
+Tile Size 10
+
+Area
+Min Area 10
+Max Area 647
+
+Perimeter
+Min Perimeter 10
+Max Perimeter 419
+
+Shape
+Min Eccentricity 0.16
+Max Eccentricity 17.9
+Min Aspect Ratio 0.98
+Max Aspect Ratio 2.5
+
+Edge
+Canny Low 10
+Canny High 50
+Edge Threshold 10
+Min Object Size 12
+
+Watershed
+Enabled
+Distance Threshold 10
+Footprint Size 3
+Compactness 0.5
+Min Area for Watershed 500
+Area threshold Small 200
+Area threshold Large 400
+
