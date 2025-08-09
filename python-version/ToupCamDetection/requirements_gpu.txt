@@ -1,0 +1,24 @@
+# GPU-accelerated requirements for Anaconda environment
+# Install with: conda install -c conda-forge <package>
+
+# Core packages
+opencv-contrib-python>=4.8.0  # Includes CUDA support
+numpy>=1.21.0
+scikit-image>=0.18.0
+Pillow>=8.0.0
+scipy>=1.7.0
+pywin32>=227
+
+# GPU acceleration packages
+cupy-cuda11x>=11.0.0  # GPU-accelerated NumPy replacement (adjust CUDA version as needed)
+# Alternative: cupy-cuda12x for CUDA 12.x
+
+# Optional: Additional GPU packages
+# numba>=0.56.0  # JIT compilation for GPU
+# cucim>=22.08.00  # GPU-accelerated image processing (if available)
+
+# Installation commands for Anaconda:
+# conda create -n celldetection_gpu python=3.9
+# conda activate celldetection_gpu
+# conda install -c conda-forge opencv cupy numpy scikit-image pillow scipy
+# pip install pywin32

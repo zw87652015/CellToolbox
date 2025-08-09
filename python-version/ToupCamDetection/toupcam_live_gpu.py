@@ -1,5 +1,5 @@
 """
-GPU-accelerated USB Camera Live Stream Application
+GPU-accelerated ToupCam Live Stream Application
 This module provides the main application class with GPU-accelerated cell detection.
 """
 
@@ -14,21 +14,22 @@ import json
 import cv2
 import numpy as np
 
-from camera_manager import CameraManager
+from toupcam_camera_manager import ToupCamCameraManager
 from cell_detector_gpu import CellDetectorGPU  # Use GPU version
 from aoi_manager import AOIManager
 from adaptive_cell_tracker import AdaptiveCellTracker
+from exposure_control_panel import ExposureControlPanel
 
-class USBCameraLiveGPU:
-    """Main application class for GPU-accelerated USB camera live stream with cell detection"""
+class ToupCameraLiveGPU:
+    """Main application class for GPU-accelerated ToupCam live stream with cell detection"""
     
     def __init__(self, root):
         self.root = root
-        self.root.title("USB Camera Live Stream - GPU Accelerated")
+        self.root.title("ToupCam Live Stream - GPU Accelerated")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Initialize components
-        self.camera_manager = CameraManager()
+        self.camera_manager = ToupCamCameraManager(camera_index=0, target_fps=30)
         self.cell_detector = CellDetectorGPU()  # Use GPU version
         self.cell_tracker = AdaptiveCellTracker(
             max_disappeared=0,  # Reduced from 15 to 5 frames for faster cleanup
@@ -71,12 +72,13 @@ class USBCameraLiveGPU:
         self.frame_lock = threading.Lock()
         
         # Performance monitoring
-        self.fps_counter = 0
-        self.fps_start_time = time.time()
         self.current_fps = 0
         
         # GPU status
         self.gpu_status = "GPU: " + ("Available" if self.cell_detector.gpu_available else "Not Available")
+        
+        # Exposure control panel
+        self.exposure_control_panel = None
         
         # Setup UI
         self.setup_ui()
@@ -89,6 +91,9 @@ class USBCameraLiveGPU:
         
         # Start camera
         self.start_camera()
+        
+        # Initialize exposure control panel after camera is started
+        self.exposure_control_panel = ExposureControlPanel(self.camera_manager, self.root)
     
     def update_display_dimensions(self):
         """Update display dimensions based on actual canvas size"""
@@ -173,6 +178,12 @@ class USBCameraLiveGPU:
         reconnect_btn = tk.Button(camera_frame, text="Reconnect Camera", 
                                 command=self.reconnect_camera)
         reconnect_btn.pack(pady=5)
+        
+        # Exposure control button
+        exposure_btn = tk.Button(camera_frame, text="Exposure Control", 
+                           command=self.open_exposure_control,
+                           bg='blue', fg='white')
+        exposure_btn.pack(pady=5)
         
         # Detection Controls
         detection_frame = tk.LabelFrame(self.control_panel, text="Detection Controls", 
@@ -381,17 +392,31 @@ class USBCameraLiveGPU:
         self.render_thread.start()
     
     def capture_loop(self):
-        """Camera capture loop - 30 FPS"""
+        """Camera capture loop - Unlimited FPS (camera-limited)"""
+        frame_skip_counter = 0
+        
         while self.running:
             success, frame = self.camera_manager.get_frame()
             if success and frame is not None:
                 with self.frame_lock:
                     self.current_frame = frame.copy()
-            time.sleep(1/30)  # 30 FPS
+                frame_skip_counter = 0
+            else:
+                frame_skip_counter += 1
+                # Only sleep if no frames are available to prevent busy waiting
+                if frame_skip_counter > 5:
+                    time.sleep(0.001)  # 1ms sleep to prevent CPU overload when no frames
     
     def detection_loop(self):
-        """Cell detection loop - 10 FPS for GPU efficiency"""
+        """Cell detection loop - Adaptive FPS based on GPU utilization"""
+        # Adaptive FPS control variables
+        target_fps = 10  # Starting FPS
+        min_sleep = 0.001  # 1ms minimum sleep
+        last_processing_time = time.time()
+        
         while self.running:
+            loop_start = time.time()
+            
             if self.detection_enabled and self.current_frame is not None:
                 with self.frame_lock:
                     frame_to_process = self.current_frame.copy()
@@ -496,25 +521,65 @@ class USBCameraLiveGPU:
                     import traceback
                     traceback.print_exc()
             
-            time.sleep(1/30)  # 30 FPS for detection
+            # Adaptive FPS control
+            processing_time = time.time() - loop_start
+            
+            # Calculate sleep time to maintain target FPS
+            sleep_time = max(min_sleep, (1.0 / target_fps) - processing_time)
+            time.sleep(sleep_time)
+            
+            # Dynamically adjust target FPS based on GPU headroom
+            gpu_util = self.cell_detector.get_gpu_utilization()  # Requires GPU util monitor
+            if gpu_util < 70:  # If GPU utilization <70%
+                target_fps = min(60, target_fps * 1.1)  # Increase FPS by 10%
+            else:
+                target_fps = max(10, target_fps * 0.95)  # Reduce FPS if nearing limit
     
     def render_loop(self):
-        """Rendering loop - 60 FPS"""
+        """Rendering loop - High FPS display (up to 120 FPS)"""
+        last_fps_update = time.time()
+        last_frame_id = None
+        display_fps_target = 120  # Increase display target FPS
+        frame_interval = 1.0 / display_fps_target
+        last_render_time = time.time()
+        
         while self.running:
-            if self.current_frame is not None:
-                with self.frame_lock:
-                    frame_to_display = self.current_frame.copy()
-                
-                # Create display frame
-                display_frame = self.create_display_frame(frame_to_display)
-                
-                # Update display
-                self.root.after(0, lambda df=display_frame: self.update_display(df))
-                
-                # Update FPS
-                self.update_fps()
+            current_time = time.time()
             
-            time.sleep(1/60)  # 60 FPS
+            # Only render if enough time has passed (frame rate limiting)
+            if current_time - last_render_time >= frame_interval:
+                if self.current_frame is not None:
+                    with self.frame_lock:
+                        frame_to_display = self.current_frame.copy()
+                        current_frame_id = id(self.current_frame)  # Get frame identity
+                    
+                    # Only process if we have a new frame (avoid redundant processing)
+                    if current_frame_id != last_frame_id:
+                        # Create display frame
+                        display_frame = self.create_display_frame(frame_to_display)
+                        
+                        # Update display with higher priority
+                        self.root.after_idle(lambda df=display_frame: self.update_display(df))
+                        
+                        last_frame_id = current_frame_id
+                    
+                    last_render_time = current_time
+            
+            # Update FPS display every second using camera manager's actual FPS
+            if current_time - last_fps_update >= 1.0:
+                if self.camera_manager and self.camera_manager.is_running():
+                    # Calculate actual camera FPS from camera manager's frame count
+                    camera_fps = self.camera_manager.frame_count
+                    self.camera_manager.frame_count = 0  # Reset counter
+                    self.current_fps = camera_fps
+                    
+                    # Update FPS label
+                    self.root.after_idle(lambda: self.fps_label.config(text=f"Camera: {camera_fps} FPS"))
+                
+                last_fps_update = current_time
+            
+            # Minimal sleep to prevent excessive CPU usage while allowing high FPS
+            time.sleep(0.001)  # 1ms sleep instead of 16.7ms (60 FPS)
     
     def create_display_frame(self, frame):
         """Create frame for display with overlays and proper aspect ratio"""
@@ -797,17 +862,7 @@ class USBCameraLiveGPU:
         except Exception as e:
             print(f"Display update error: {e}")
     
-    def update_fps(self):
-        """Update FPS counter"""
-        self.fps_counter += 1
-        current_time = time.time()
-        if current_time - self.fps_start_time >= 1.0:
-            self.current_fps = self.fps_counter
-            self.fps_counter = 0
-            self.fps_start_time = current_time
-            
-            # Update FPS label
-            self.root.after(0, lambda: self.fps_label.config(text=f"FPS: {self.current_fps}"))
+
     
     def toggle_detection(self):
         """Toggle cell detection"""
@@ -1105,10 +1160,20 @@ class USBCameraLiveGPU:
             self.root.geometry("1600x1000")
         print(f"Fullscreen {'enabled' if self.fullscreen else 'disabled'}")
     
+    def open_exposure_control(self):
+        """Open the exposure control panel"""
+        if self.exposure_control_panel:
+            self.exposure_control_panel.open_panel()
+    
     def on_closing(self):
         """Handle application closing"""
         print("Closing application...")
         self.running = False
+        
+        # Close exposure control panel if open
+        if self.exposure_control_panel:
+            self.exposure_control_panel.close_panel()
+        
         self.stop_camera()
         if self.debug_window:
             self.debug_window.destroy()

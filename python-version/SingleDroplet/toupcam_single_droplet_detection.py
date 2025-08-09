@@ -23,6 +23,9 @@ import math
 import random
 import toupcam
 
+# Import exposure control panel
+from exposure_control_panel import ExposureControlPanel
+
 # Add parent directory to path to find modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -134,6 +137,11 @@ def detect_cells_in_roi(frame, roi_rect, params=None):
     # Extract ROI from frame
     x, y, w, h = roi_rect
     roi = frame[y:y+h, x:x+w]
+    
+    # Validate ROI is not empty
+    if roi.size == 0 or roi.shape[0] == 0 or roi.shape[1] == 0:
+        print(f"Warning: Empty ROI detected - roi_rect: {roi_rect}, roi.shape: {roi.shape}")
+        return []
     
     # Convert to grayscale
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -304,9 +312,18 @@ class SingleDropletApp:
         self.frame_width = 0
         self.frame_height = 0
         self.auto_exposure = True
-        self.exposure_time = 16667  # Default to 16.67ms (60Hz anti-flicker)
+        self.exposure_time = 8333   # Default to 8.333ms for higher FPS
         self.gain = 100  # Default gain
         self.light_source = 2  # Default to 60Hz (North America)
+        
+        # Threading and performance optimization
+        self.frame_lock = threading.Lock()
+        self.render_running = False
+        self.render_thread = None
+        self.detection_thread = None
+        self.detection_queue = queue.Queue(maxsize=2)  # Small queue to avoid memory buildup
+        self.detection_results = []
+        self.detection_lock = threading.Lock()
         
         # Initialize variables
         self.running = True
@@ -324,6 +341,9 @@ class SingleDropletApp:
         # Load calibration data
         self.calibration_data = load_calibration_data()
         
+        # Initialize exposure control panel
+        self.exposure_control_panel = None
+        
         # Create UI
         self.create_ui()
         
@@ -335,6 +355,12 @@ class SingleDropletApp:
         
         # Start camera
         self.start_camera()
+        
+        # Start render thread for high-performance UI updates
+        self.start_render_thread()
+        
+        # Start cell detection thread
+        self.start_detection_thread()
         
         # Start Pygame update thread
         self.pygame_thread = threading.Thread(target=self.update_pygame)
@@ -376,23 +402,46 @@ class SingleDropletApp:
             # Create frame buffer for OpenCV
             self.frame_buffer = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
             
-            # Set camera options for low latency
+            # Set camera options for low latency and manual exposure
             try:
-                # Set low latency mode if available
-                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_NOPACKET_TIMEOUT, 0)  # Disable packet timeout
-                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_FRAME_DEQUE_LENGTH, 2)  # Minimum frame buffer
-                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_PROCESSMODE, 0)  # Raw mode for lower latency
-                self.hcam.put_RealTime(True)  # Enable real-time mode
-                
-                # Set 60Hz anti-flicker (common in North America)
-                self.hcam.put_HZ(self.light_source)
-                
-                # Set manual exposure with optimal time for 60Hz (16.67ms)
+                # First, disable auto exposure
+                print("Disabling auto exposure...")
                 self.hcam.put_AutoExpoEnable(False)
+                self.auto_exposure = False
+                print("Auto exposure disabled")
+                
+                # Set manual exposure time (8.333ms)
+                print(f"Setting exposure time to {self.exposure_time} microseconds...")
                 self.hcam.put_ExpoTime(self.exposure_time)
+                print(f"Exposure time set to {self.exposure_time} microseconds")
                 
             except toupcam.HRESULTException as ex:
-                print(f"Could not set camera options: 0x{ex.hr & 0xffffffff:x}")
+                print(f"Error setting exposure: 0x{ex.hr & 0xffffffff:x}")
+                
+            # Set other camera options separately
+            try:
+                # Set 60Hz anti-flicker (common in North America)
+                self.hcam.put_HZ(self.light_source)
+                print(f"Anti-flicker set to {self.light_source} (60Hz)")
+            except toupcam.HRESULTException as ex:
+                print(f"Could not set anti-flicker: 0x{ex.hr & 0xffffffff:x}")
+                
+            try:
+                # Set low latency options
+                self.hcam.put_Option(toupcam.TOUPCAM_OPTION_FRAME_DEQUE_LENGTH, 2)  # Minimum frame buffer
+                self.hcam.put_RealTime(True)  # Enable real-time mode
+                print("Low latency options set")
+            except toupcam.HRESULTException as ex:
+                print(f"Could not set low latency options: 0x{ex.hr & 0xffffffff:x}")
+                
+            # Set white balance settings
+            try:
+                # Set white balance temperature and tint
+                print("Setting white balance...")
+                self.hcam.put_TempTint(5335, 1177)  # Temp=5335, Tint=1177
+                print("White balance set to Temp=5335, Tint=1177")
+            except toupcam.HRESULTException as ex:
+                print(f"Could not set white balance: 0x{ex.hr & 0xffffffff:x}")
             
             # Start the camera with callback
             self.running = True
@@ -405,50 +454,94 @@ class SingleDropletApp:
     
     @staticmethod
     def camera_callback(nEvent, ctx):
-        """Static callback function for the camera events"""
+        """Static callback function for the camera events - optimized for minimal latency"""
         if nEvent == toupcam.TOUPCAM_EVENT_IMAGE:
             ctx.process_image()
         elif nEvent == toupcam.TOUPCAM_EVENT_EXPOSURE:
-            ctx.status_var.set("Auto exposure adjustment in progress")
+            pass  # Minimize callback processing for performance
         elif nEvent == toupcam.TOUPCAM_EVENT_TEMPTINT:
-            ctx.status_var.set("White balance adjustment in progress")
+            pass  # Minimize callback processing for performance
         elif nEvent == toupcam.TOUPCAM_EVENT_ERROR:
             ctx.status_var.set("Camera error occurred")
         elif nEvent == toupcam.TOUPCAM_EVENT_DISCONNECTED:
             ctx.status_var.set("Camera disconnected")
     
     def process_image(self):
-        """Process the image received from the camera"""
+        """Process the image received from the camera - optimized for zero-copy performance"""
         if not self.running or not self.hcam:
             return
-        
+    
         try:
             # Pull the image from the camera with minimal processing
             self.hcam.PullImageV4(self.cam_buffer, 0, 24, 0, None)
             
-            # Convert the raw buffer to a numpy array
-            frame = np.frombuffer(self.cam_buffer, dtype=np.uint8)
+            # Convert the raw buffer to a numpy array using pre-allocated shape
+            stride = toupcam.TDIBWIDTHBYTES(self.frame_width * 24) // 3
+            frame = np.frombuffer(self.cam_buffer, dtype=np.uint8).reshape(
+                (self.frame_height, stride, 3))[:, :self.frame_width, :]
             
-            # Reshape the array to an image format
-            frame = frame.reshape((self.frame_height, toupcam.TDIBWIDTHBYTES(self.frame_width * 24) // 3, 3))
-            frame = frame[:, :self.frame_width, :]
+            # Thread-safe frame buffer update
+            with self.frame_lock:
+                self.frame_buffer = frame
             
-            # Store the frame (no copy to reduce latency)
-            self.frame_buffer = frame
-            
-            # Update UI with the new frame
-            self.root.after_idle(self.update_frame)
+            # Note: Frame queuing removed - using single-shot detection instead
             
         except toupcam.HRESULTException as ex:
             print(f"Error pulling image: 0x{ex.hr & 0xffffffff:x}")
     
-    def update_frame(self):
-        """Update the UI with the latest frame"""
-        if not self.running or self.frame_buffer is None:
-            return
+    def start_render_thread(self):
+        """Start a dedicated thread for rendering frames at high FPS"""
+        self.render_running = True
+        self.render_thread = threading.Thread(target=self.render_loop)
+        self.render_thread.daemon = True
+        self.render_thread.start()
+        print("Render thread started")
+    
+    def render_loop(self):
+        """Continuously render frames at a high rate for smooth display"""
+        try:
+            while self.render_running:
+                if self.running and self.frame_buffer is not None:
+                    # Use tkinter's thread-safe after_idle method to update UI
+                    self.root.after_idle(self.update_frame)
+                    
+                # Sleep briefly to avoid excessive CPU usage while maintaining high FPS
+                time.sleep(0.01)  # 10ms = potential for 100fps
+        except Exception as e:
+            print(f"Error in render loop: {str(e)}")
         
-        # Make a copy of the frame for processing
-        frame = self.frame_buffer.copy()
+        print("Render thread exiting")
+    
+    def start_detection_thread(self):
+        """Start a dedicated thread for cell detection processing"""
+        self.detection_thread = threading.Thread(target=self.detection_loop)
+        self.detection_thread.daemon = True
+        self.detection_thread.start()
+        print("Detection thread started")
+    
+    def detection_loop(self):
+        """Detection loop disabled - using single-shot detection instead"""
+        print("Detection thread started (single-shot mode - no continuous processing)")
+        try:
+            # Just wait for the application to close
+            while self.running:
+                time.sleep(1.0)  # Sleep longer since we're not doing continuous detection
+                    
+        except Exception as e:
+            print(f"Error in detection loop: {str(e)}")
+        
+        print("Detection thread exiting")
+    
+    def update_frame(self):
+        """Update the UI with the latest frame - called from render thread"""
+        if not self.running:
+            return
+            
+        # Thread-safe frame access
+        with self.frame_lock:
+            if self.frame_buffer is None:
+                return
+            frame = self.frame_buffer.copy()
         
         # Convert BGR to RGB for display
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -461,7 +554,10 @@ class SingleDropletApp:
         
         # Draw detected cells if detection is active
         if self.detection_active and self.rect:
-            for cell in self.detected_cells:
+            with self.detection_lock:
+                detected_cells = self.detected_cells.copy()
+            
+            for cell in detected_cells:
                 # Draw circle at cell center
                 cv2.circle(frame_rgb, 
                           (int(cell.center[0]), int(cell.center[1])), 
@@ -474,23 +570,48 @@ class SingleDropletApp:
                     x, y, w, h = cell.bbox
                     cv2.rectangle(frame_rgb, (x, y), (x+w, y+h), (255, 0, 0), 1)
         
-        # Convert to PhotoImage for display
+        # Get canvas dimensions
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        
+        # Use default canvas size if not yet rendered
+        if canvas_width <= 1:
+            canvas_width = 640
+        if canvas_height <= 1:
+            canvas_height = 480
+        
+        # Calculate scaling to fit canvas while maintaining aspect ratio
         h, w = frame_rgb.shape[:2]
-        img = Image.fromarray(frame_rgb)
+        scale_x = canvas_width / w
+        scale_y = canvas_height / h
+        scale = min(scale_x, scale_y)  # Use smaller scale to fit entirely
+        
+        # Calculate new dimensions
+        new_width = int(w * scale)
+        new_height = int(h * scale)
+        
+        # Resize frame to fit canvas
+        frame_resized = cv2.resize(frame_rgb, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+        
+        # Convert to PhotoImage for display
+        img = Image.fromarray(frame_resized)
         photo = ImageTk.PhotoImage(image=img)
         
-        # Update canvas
-        self.canvas.config(width=w, height=h)
-        self.canvas.create_image(0, 0, image=photo, anchor=tk.NW)
+        # Clear canvas and center the image
+        self.canvas.delete("all")
+        x_offset = (canvas_width - new_width) // 2
+        y_offset = (canvas_height - new_height) // 2
+        self.canvas.create_image(x_offset, y_offset, image=photo, anchor=tk.NW)
         self.canvas.image = photo  # Keep a reference to prevent garbage collection
         
-        # Update cell info
-        if self.detection_active:
-            self.update_cell_info()
+        # Store scaling factors for coordinate conversion
+        self.display_scale = scale
+        self.display_offset_x = x_offset
+        self.display_offset_y = y_offset
         
-        # If in camera view mode, schedule next update
-        if self.view_mode_var.get() == "Camera":
-            self.root.after(10, self.update_frame)
+        # Update cell info less frequently to reduce UI overhead
+        if self.detection_active:
+            self.root.after_idle(self.update_cell_info)
             
     def update_camera(self):
         """Legacy method - no longer needed with ToupCam callback approach"""
@@ -519,6 +640,7 @@ class SingleDropletApp:
         ttk.Button(control_frame, text="Detect Cells", command=self.toggle_detection).pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Save Cells", command=self.save_selected_cells).pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Clear Selection", command=self.clear_selection).pack(fill=tk.X, pady=5)
+        ttk.Button(control_frame, text="Exposure Control", command=self.open_exposure_control).pack(fill=tk.X, pady=5)
         
         # View toggle button
         self.view_toggle_button = ttk.Button(control_frame, text="Switch to Donut View", command=self.toggle_view_mode)
@@ -632,6 +754,16 @@ class SingleDropletApp:
                 # Clear screen with black
                 self.pygame_screen.fill((0, 0, 0))
                 
+                # Draw debug box at center when donut view is active
+                if self.show_donuts:
+                    screen_width, screen_height = self.pygame_screen.get_size()
+                    center_x = screen_width // 2
+                    center_y = screen_height // 2
+                    box_size = 50
+                    box_x = center_x - box_size // 2
+                    box_y = center_y - box_size // 2
+                    pygame.draw.rect(self.pygame_screen, (255, 255, 255), (box_x, box_y, box_size, box_size))
+                
                 # Draw FOV corners from calibration data
                 try:
                     fov_corners = self.calibration_data.get('fov_corners', None)
@@ -640,6 +772,10 @@ class SingleDropletApp:
                         pygame.draw.lines(self.pygame_screen, (50, 50, 50), True, fov_corners, 1)
                 except Exception as e:
                     print(f"Error drawing FOV corners: {str(e)}")
+                
+                # Draw detected cells as boxes if enabled
+                if self.show_donuts and self.detected_cells:
+                    self.draw_cell_boxes()
                 
                 # Draw donuts if enabled
                 if self.show_donuts and self.selected_cells:
@@ -809,13 +945,25 @@ class SingleDropletApp:
         # Clear previous rectangle
         self.canvas.delete("rect")
         
-        # Get display dimensions
-        display_width = self.canvas.winfo_width()
-        display_height = self.canvas.winfo_height()
-        
-        # Convert to camera coordinates
-        x = int(event.x * self.frame_width / display_width)
-        y = int(event.y * self.frame_height / display_height)
+        # Convert display coordinates to camera coordinates using scaling factors
+        if hasattr(self, 'display_scale') and hasattr(self, 'display_offset_x'):
+            # Account for offset and scaling
+            x_display = event.x - self.display_offset_x
+            y_display = event.y - self.display_offset_y
+            
+            # Convert to camera coordinates
+            x = int(x_display / self.display_scale)
+            y = int(y_display / self.display_scale)
+            
+            # Clamp to frame bounds
+            x = max(0, min(x, self.frame_width - 1))
+            y = max(0, min(y, self.frame_height - 1))
+        else:
+            # Fallback to old method if scaling not available
+            display_width = self.canvas.winfo_width()
+            display_height = self.canvas.winfo_height()
+            x = int(event.x * self.frame_width / display_width)
+            y = int(event.y * self.frame_height / display_height)
         
         # Store start position
         self.rect_start = (x, y)
@@ -826,13 +974,25 @@ class SingleDropletApp:
         if not self.rect_start:
             return
         
-        # Get display dimensions
-        display_width = self.canvas.winfo_width()
-        display_height = self.canvas.winfo_height()
-        
-        # Convert to camera coordinates
-        x = int(event.x * self.frame_width / display_width)
-        y = int(event.y * self.frame_height / display_height)
+        # Convert display coordinates to camera coordinates using scaling factors
+        if hasattr(self, 'display_scale') and hasattr(self, 'display_offset_x'):
+            # Account for offset and scaling
+            x_display = event.x - self.display_offset_x
+            y_display = event.y - self.display_offset_y
+            
+            # Convert to camera coordinates
+            x = int(x_display / self.display_scale)
+            y = int(y_display / self.display_scale)
+            
+            # Clamp to frame bounds
+            x = max(0, min(x, self.frame_width - 1))
+            y = max(0, min(y, self.frame_height - 1))
+        else:
+            # Fallback to old method if scaling not available
+            display_width = self.canvas.winfo_width()
+            display_height = self.canvas.winfo_height()
+            x = int(event.x * self.frame_width / display_width)
+            y = int(event.y * self.frame_height / display_height)
         
         # Update end position
         self.rect_end = (x, y)
@@ -840,15 +1000,24 @@ class SingleDropletApp:
         # Clear previous rectangle
         self.canvas.delete("rect")
         
-        # Draw new rectangle (scaled to display)
+        # Draw new rectangle (convert camera coordinates back to display coordinates)
         x1, y1 = self.rect_start
         x2, y2 = self.rect_end
         
-        # Scale coordinates to match display size
-        x1_scaled = int(x1 * display_width / self.frame_width)
-        y1_scaled = int(y1 * display_height / self.frame_height)
-        x2_scaled = int(x2 * display_width / self.frame_width)
-        y2_scaled = int(y2 * display_height / self.frame_height)
+        if hasattr(self, 'display_scale') and hasattr(self, 'display_offset_x'):
+            # Scale coordinates to match display size
+            x1_scaled = int(x1 * self.display_scale + self.display_offset_x)
+            y1_scaled = int(y1 * self.display_scale + self.display_offset_y)
+            x2_scaled = int(x2 * self.display_scale + self.display_offset_x)
+            y2_scaled = int(y2 * self.display_scale + self.display_offset_y)
+        else:
+            # Fallback to old method
+            display_width = self.canvas.winfo_width()
+            display_height = self.canvas.winfo_height()
+            x1_scaled = int(x1 * display_width / self.frame_width)
+            y1_scaled = int(y1 * display_height / self.frame_height)
+            x2_scaled = int(x2 * display_width / self.frame_width)
+            y2_scaled = int(y2 * display_height / self.frame_height)
         
         # Draw rectangle on canvas
         self.canvas.create_rectangle(
@@ -861,13 +1030,25 @@ class SingleDropletApp:
         if not self.rect_start:
             return
         
-        # Get display dimensions
-        display_width = self.canvas.winfo_width()
-        display_height = self.canvas.winfo_height()
-        
-        # Convert to camera coordinates
-        x = int(event.x * self.frame_width / display_width)
-        y = int(event.y * self.frame_height / display_height)
+        # Convert display coordinates to camera coordinates using scaling factors
+        if hasattr(self, 'display_scale') and hasattr(self, 'display_offset_x'):
+            # Account for offset and scaling
+            x_display = event.x - self.display_offset_x
+            y_display = event.y - self.display_offset_y
+            
+            # Convert to camera coordinates
+            x = int(x_display / self.display_scale)
+            y = int(y_display / self.display_scale)
+            
+            # Clamp to frame bounds
+            x = max(0, min(x, self.frame_width - 1))
+            y = max(0, min(y, self.frame_height - 1))
+        else:
+            # Fallback to old method if scaling not available
+            display_width = self.canvas.winfo_width()
+            display_height = self.canvas.winfo_height()
+            x = int(event.x * self.frame_width / display_width)
+            y = int(event.y * self.frame_height / display_height)
         
         # Update end position
         self.rect_end = (x, y)
@@ -921,54 +1102,180 @@ class SingleDropletApp:
             import traceback
             traceback.print_exc()
 
-    def display_donuts(self):
-        """Display white donuts for detected cells on the black background screen"""
-        if not self.pygame_initialized or not self.pygame_running:
-            self.status_var.set("Pygame not initialized")
-            return
-            
-        if not self.detected_cells:
-            self.status_var.set("No cells detected")
-            return
-            
+    def draw_cell_boxes(self):
+        """Draw rectangular boxes for detected cells at their corresponding positions"""
         try:
-            # Get the current frame for reference
-            if self.frame_buffer is None:
-                self.status_var.set("No frame available")
-                return
+            # Get calibration data for coordinate transformation
+            scale = self.calibration_data.get('scale', 1.0)
+            rotation = self.calibration_data.get('rotation', 0.0)
+            offset_x = self.calibration_data.get('offset_x', 0)
+            offset_y = self.calibration_data.get('offset_y', 0)
+            
+            # Get FOV corners for scaling reference
+            fov_corners = self.calibration_data.get('fov_corners', None)
+            
+            # Calculate FOV bounds if available
+            fov_min_x, fov_min_y, fov_max_x, fov_max_y = 0, 0, 0, 0
+            fov_width, fov_height = 0, 0
+            
+            if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
+                # Extract x and y coordinates
+                x_coords = [corner[0] for corner in fov_corners]
+                y_coords = [corner[1] for corner in fov_corners]
                 
-            # Create a black background
-            screen_width, screen_height = pygame.display.get_surface().get_size()
-            screen = pygame.display.get_surface()
-            screen.fill((0, 0, 0))
-            
-            # Draw donuts for each cell
-            for cell in self.detected_cells:
-                # Calculate inner and outer radius
-                inner_radius = int(cell.radius * self.donut_inner_scale)
-                outer_radius = int(cell.radius * self.donut_outer_scale)
+                # Calculate bounds
+                fov_min_x = min(x_coords)
+                fov_max_x = max(x_coords)
+                fov_min_y = min(y_coords)
+                fov_max_y = max(y_coords)
                 
-                # Draw the outer circle (white)
-                pygame.draw.circle(screen, (255, 255, 255), 
-                                  (int(cell.center[0]), int(cell.center[1])), 
-                                  outer_radius)
-                
-                # Draw the inner circle (black)
-                pygame.draw.circle(screen, (0, 0, 0), 
-                                  (int(cell.center[0]), int(cell.center[1])), 
-                                  inner_radius)
+                # Calculate dimensions
+                fov_width = fov_max_x - fov_min_x
+                fov_height = fov_max_y - fov_min_y
             
-            # Update the display
-            pygame.display.flip()
+            # Get screen dimensions
+            screen_width, screen_height = self.pygame_screen.get_size()
             
-            # Update status
-            self.status_var.set(f"Displaying {len(self.detected_cells)} donuts")
+            # Thread-safe access to detected cells
+            with self.detection_lock:
+                detected_cells = self.detected_cells.copy() if self.detected_cells else []
             
+            print(f"Drawing {len(detected_cells)} cell boxes")
+            
+            # Draw each detected cell as a rectangular box
+            for cell in detected_cells:
+                try:
+                    # Get cell center and radius
+                    if hasattr(cell, 'center') and hasattr(cell, 'radius'):
+                        center = cell.center
+                        radius = cell.radius
+                    elif isinstance(cell, tuple) and len(cell) == 2:
+                        center, radius = cell
+                    else:
+                        print(f"Unknown cell structure: {cell}")
+                        continue
+                    
+                    # Transform camera coordinates to projector space
+                    if fov_width > 0 and fov_height > 0:
+                        # Apply calibration transformation
+                        x_scaled = center[0] * scale
+                        y_scaled = center[1] * scale
+                        
+                        # Apply rotation if needed (simplified - assumes small rotation)
+                        if rotation != 0:
+                            import math
+                            cos_r = math.cos(math.radians(rotation))
+                            sin_r = math.sin(math.radians(rotation))
+                            x_rotated = x_scaled * cos_r - y_scaled * sin_r
+                            y_rotated = x_scaled * sin_r + y_scaled * cos_r
+                            x_scaled, y_scaled = x_rotated, y_rotated
+                        
+                        # Apply offset
+                        x_final = x_scaled + offset_x
+                        y_final = y_scaled + offset_y
+                        
+                        # Map to screen coordinates within FOV
+                        screen_x = int((x_final - fov_min_x) / fov_width * screen_width)
+                        screen_y = int((y_final - fov_min_y) / fov_height * screen_height)
+                        
+                        # Scale radius to screen coordinates
+                        scaled_radius = int(radius * scale * screen_width / fov_width)
+                    else:
+                        # Fallback: direct mapping without FOV transformation
+                        screen_x = int(center[0] * screen_width / self.frame_width)
+                        screen_y = int(center[1] * screen_height / self.frame_height)
+                        scaled_radius = int(radius * min(screen_width, screen_height) / min(self.frame_width, self.frame_height))
+                    
+                    # Ensure coordinates are within screen bounds
+                    screen_x = max(0, min(screen_width - 1, screen_x))
+                    screen_y = max(0, min(screen_height - 1, screen_y))
+                    
+                    # Calculate box dimensions (make it slightly larger than the cell radius)
+                    box_size = max(10, scaled_radius * 2)  # Minimum 10 pixels, or 2x radius
+                    box_half = box_size // 2
+                    
+                    # Calculate box coordinates
+                    box_x = screen_x - box_half
+                    box_y = screen_y - box_half
+                    
+                    # Ensure box stays within screen bounds
+                    box_x = max(0, min(screen_width - box_size, box_x))
+                    box_y = max(0, min(screen_height - box_size, box_y))
+                    
+                    # Draw filled white box
+                    pygame.draw.rect(self.pygame_screen, (255, 255, 255), (box_x, box_y, box_size, box_size))
+                    
+                    # Draw a small black center dot for precise positioning (visible on white background)
+                    pygame.draw.circle(self.pygame_screen, (0, 0, 0), (screen_x, screen_y), 3)
+                    
+                    print(f"Drew cell box at screen ({screen_x}, {screen_y}) with size {box_size}x{box_size}")
+                    
+                except Exception as e:
+                    print(f"Error drawing individual cell box: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    
         except Exception as e:
-            self.status_var.set(f"Error displaying donuts: {str(e)}")
+            print(f"Error in draw_cell_boxes: {str(e)}")
             import traceback
             traceback.print_exc()
 
+    def display_donuts(self):
+        """Display white donuts for detected cells on the black background screen"""
+        print("Entering display_donuts method")  # DEBUG
+        if not self.pygame_initialized or not self.pygame_running:
+            self.status_var.set("Pygame not initialized")
+            print("Pygame not initialized or not running")  # DEBUG
+            return
+            
+        try:
+            print("Starting donut display")  # DEBUG
+            # Create a black background
+            screen = pygame.display.get_surface()
+            print(f"Got pygame screen: {screen}")  # DEBUG
+            screen.fill((0, 0, 0))
+            
+            # Get screen dimensions
+            screen_width, screen_height = screen.get_size()
+            
+            # Draw debug box at center
+            center_x = screen_width // 2
+            center_y = screen_height // 2
+            box_size = 50
+            box_x = center_x - box_size // 2
+            box_y = center_y - box_size // 2
+            pygame.draw.rect(screen, (255, 255, 255), (box_x, box_y, box_size, box_size))
+            
+            print(f"DEBUG: Drew white box at ({box_x}, {box_y}) with size {box_size}x{box_size} on Pygame screen ({screen_width}x{screen_height})")
+            print(f"Screen dimensions: {screen_width}x{screen_height}")  # DEBUG
+            
+            # DEBUG: Draw a white 50x50 pixel box at the center of the screen
+            center_x = screen_width // 2
+            center_y = screen_height // 2
+            box_size = 50
+            
+            # Calculate box coordinates (top-left corner)
+            box_x = center_x - box_size // 2
+            box_y = center_y - box_size // 2
+            
+            # Draw white box
+            print(f"Drawing white box at ({box_x}, {box_y}) with size {box_size}x{box_size}")  # DEBUG
+            pygame.draw.rect(screen, (255, 255, 255), (box_x, box_y, box_size, box_size))
+            
+            # Update the display
+            pygame.display.flip()
+            print("Display flipped")  # DEBUG
+            
+            # Update status
+            self.status_var.set(f"Debug: Displaying white box at center ({center_x}, {center_y})")
+            print(f"Drew white 50x50 box at center ({center_x}, {center_y}) on pygame screen ({screen_width}x{screen_height})")
+            
+        except Exception as e:
+            self.status_var.set(f"Error displaying donuts: {str(e)}")
+            print(f"Error in display_donuts: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def update_cell_info(self):
         """Update the cell information text"""
         self.cell_info_var.set(f"Selected Cells: {len(self.detected_cells)}")
@@ -986,16 +1293,36 @@ class SingleDropletApp:
         self.cell_info_var.set(cell_info)
     
     def toggle_detection(self):
-        """Detect cells once when button is clicked"""
+        """Run cell detection once when button is pressed"""
         if not self.rect:
             self.status_var.set("Please draw a rectangle first")
             return
             
-        # Run cell detection once
-        self.detect_cells()
+        # Get current frame for detection
+        with self.frame_lock:
+            if self.frame_buffer is None:
+                self.status_var.set("No frame available")
+                return
+            frame = self.frame_buffer.copy()
         
-        # Update status
-        self.status_var.set(f"Detected {len(self.detected_cells)} cells in selection")
+        try:
+            # Run cell detection once
+            self.status_var.set("Detecting cells...")
+            detected_cells = detect_cells_in_roi(frame, self.rect)
+            
+            # Update detected cells
+            with self.detection_lock:
+                self.detected_cells = detected_cells
+            
+            # Update cell info
+            self.update_cell_info()
+            
+            # Update status
+            self.status_var.set(f"Detected {len(detected_cells)} cells")
+            
+        except Exception as e:
+            self.status_var.set(f"Error detecting cells: {str(e)}")
+            print(f"Error in cell detection: {e}")
     
     def save_selected_cells(self):
         """Save selected cells to a file"""
@@ -1032,6 +1359,14 @@ class SingleDropletApp:
         self.canvas.delete("rect")
         self.canvas.delete("cell")
         
+        self.cell_info_var.set("Selection cleared")
+        
+    def open_exposure_control(self):
+        """Open the exposure control panel"""
+        if self.exposure_control_panel is None:
+            self.exposure_control_panel = ExposureControlPanel(self)
+        self.exposure_control_panel.open_panel()
+        
         # Update cell info
         self.update_cell_info()
         
@@ -1054,36 +1389,25 @@ class SingleDropletApp:
             self.view_mode_var.set("Donut")
             self._update_view_button()
             
-            # Make sure we have cells detected
-            if not self.detected_cells:
-                # Try to detect cells if we have a rectangle
-                if self.rect:
-                    self.detect_cells()
-                
-                # If still no cells, show error
-                if not self.detected_cells:
-                    self.status_var.set("No cells detected. Please detect cells first.")
-                    # Switch back to camera view
-                    self.view_mode_var.set("Camera")
-                    self._update_view_button()
-                    return
+            # Enable donut display in pygame
+            self.show_donuts = True
             
             # Display donuts
             self.display_donuts()
             
             # Update status
-            self.status_var.set(f"Displaying {len(self.detected_cells)} donuts")
+            self.status_var.set("Switched to donut view")
             
         else:
             # Switch to Camera view
             self.view_mode_var.set("Camera")
             self._update_view_button()
             
-            # Resume camera updates
-            self.update_frame()
+            # Disable donut display
+            self.show_donuts = False
             
             # Update status
-            self.status_var.set("Camera view active")
+            self.status_var.set("Switched to camera view")
             
     def _update_view_button(self):
         """Update the view toggle button text based on the current view mode"""
@@ -1099,6 +1423,7 @@ class SingleDropletApp:
         
         # Set running flag to False to stop threads
         self.running = False
+        self.render_running = False
         self.pygame_running = False
         
         # Release camera with proper cleanup
@@ -1141,6 +1466,14 @@ class SingleDropletApp:
                 print(f"Error setting up camera cleanup: {e}")
         
         # Wait for threads to finish
+        if hasattr(self, 'render_thread') and self.render_thread and self.render_thread.is_alive():
+            self.render_thread.join(timeout=1.0)
+            print("Render thread stopped")
+        
+        if hasattr(self, 'detection_thread') and self.detection_thread and self.detection_thread.is_alive():
+            self.detection_thread.join(timeout=1.0)
+            print("Detection thread stopped")
+        
         if hasattr(self, 'pygame_thread') and self.pygame_thread.is_alive():
             self.pygame_thread.join(timeout=1.0)
         
