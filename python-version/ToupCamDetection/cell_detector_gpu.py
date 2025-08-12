@@ -249,6 +249,191 @@ class CellDetectorGPU:
         else:
             return cv2.morphologyEx(image, operation, kernel, iterations=iterations)
     
+    def _gpu_clahe(self, image, clip_limit=2.0, tile_grid_size=(8, 8)):
+        """GPU-accelerated CLAHE using CuPy"""
+        if not self.gpu_available:
+            # Fallback to CPU CLAHE
+            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+            return clahe.apply(image)
+        
+        gpu_image = cp.asarray(image, dtype=cp.float32)
+        h, w = gpu_image.shape
+        tile_h, tile_w = tile_grid_size
+        
+        # Calculate tile dimensions
+        step_h = h // tile_h
+        step_w = w // tile_w
+        
+        # Process each tile
+        result = cp.zeros_like(gpu_image)
+        
+        for i in range(tile_h):
+            for j in range(tile_w):
+                # Define tile boundaries
+                y1 = i * step_h
+                y2 = min((i + 1) * step_h, h)
+                x1 = j * step_w
+                x2 = min((j + 1) * step_w, w)
+                
+                # Extract tile
+                tile = gpu_image[y1:y2, x1:x2]
+                
+                # Calculate histogram
+                hist = cp.histogram(tile, bins=256, range=(0, 256))[0].astype(cp.float32)
+                
+                # Apply clipping
+                clip_val = clip_limit * tile.size / 256
+                excess = cp.sum(cp.maximum(hist - clip_val, 0))
+                hist = cp.minimum(hist, clip_val)
+                
+                # Redistribute excess
+                if excess > 0:
+                    redistrib = excess / 256
+                    hist += redistrib
+                
+                # Calculate CDF
+                cdf = cp.cumsum(hist)
+                cdf = (cdf / cdf[-1] * 255).astype(cp.uint8)
+                
+                # Apply histogram equalization to tile
+                tile_eq = cdf[tile.astype(cp.int32)]
+                result[y1:y2, x1:x2] = tile_eq
+        
+        return result.astype(cp.uint8)
+    
+    def _gpu_connected_components(self, binary_image):
+        """GPU-accelerated connected components analysis using CuPy"""
+        if not self.gpu_available:
+            # Fallback to CPU
+            from skimage import measure
+            labels = measure.label(binary_image)
+            return labels, cp.max(labels) if hasattr(labels, 'max') else np.max(labels)
+        
+        gpu_binary = cp.asarray(binary_image, dtype=cp.uint8)
+        
+        # Simple connected components using iterative dilation
+        # This is a simplified version - for production, consider using cuCIM
+        labels = cp.zeros_like(gpu_binary, dtype=cp.int32)
+        current_label = 1
+        
+        # Find all foreground pixels
+        foreground = gpu_binary > 0
+        
+        # Process connected components
+        while cp.any(foreground):
+            # Find first foreground pixel
+            coords = cp.where(foreground)
+            if len(coords[0]) == 0:
+                break
+                
+            # Start flood fill from first pixel
+            seed_y, seed_x = int(coords[0][0]), int(coords[1][0])
+            
+            # Create component mask using morphological operations
+            component_mask = cp.zeros_like(gpu_binary, dtype=cp.bool_)
+            component_mask[seed_y, seed_x] = True
+            
+            # Iteratively dilate to find connected pixels
+            kernel = cp.ones((3, 3), dtype=cp.uint8)
+            prev_sum = 0
+            
+            for _ in range(min(gpu_binary.shape[0], gpu_binary.shape[1])):  # Max iterations
+                # Dilate current component
+                dilated = cp_ndimage.binary_dilation(component_mask, structure=kernel)
+                # Keep only pixels that are also foreground
+                component_mask = dilated & foreground
+                
+                # Check convergence
+                current_sum = cp.sum(component_mask)
+                if current_sum == prev_sum:
+                    break
+                prev_sum = current_sum
+            
+            # Assign label to this component
+            labels[component_mask] = current_label
+            
+            # Remove processed pixels from foreground
+            foreground = foreground & ~component_mask
+            current_label += 1
+            
+            # Safety check to prevent infinite loops
+            if current_label > 10000:
+                break
+        
+        return labels, current_label - 1
+    
+    def _gpu_region_properties(self, labels, num_labels):
+        """GPU-accelerated region properties calculation using CuPy"""
+        if not self.gpu_available or num_labels == 0:
+            # Fallback to CPU regionprops
+            from skimage import measure
+            cpu_labels = labels.get() if hasattr(labels, 'get') else labels
+            return measure.regionprops(cpu_labels)
+        
+        gpu_labels = cp.asarray(labels)
+        properties = []
+        
+        for label_id in range(1, num_labels + 1):
+            # Create mask for current region
+            mask = gpu_labels == label_id
+            
+            if not cp.any(mask):
+                continue
+            
+            # Calculate basic properties on GPU
+            coords = cp.where(mask)
+            y_coords, x_coords = coords[0], coords[1]
+            
+            # Area
+            area = cp.sum(mask)
+            
+            # Centroid
+            centroid_y = cp.mean(y_coords.astype(cp.float32))
+            centroid_x = cp.mean(x_coords.astype(cp.float32))
+            
+            # Bounding box
+            min_y, max_y = cp.min(y_coords), cp.max(y_coords)
+            min_x, max_x = cp.min(x_coords), cp.max(x_coords)
+            
+            # Equivalent diameter (approximate)
+            equiv_diameter = 2 * cp.sqrt(area / cp.pi)
+            
+            # Perimeter (approximate using boundary pixels)
+            # Dilate and subtract to find boundary
+            kernel = cp.ones((3, 3), dtype=cp.uint8)
+            dilated = cp_ndimage.binary_dilation(mask, structure=kernel)
+            boundary = dilated & ~mask
+            perimeter = cp.sum(boundary)
+            
+            # Eccentricity and other shape properties (simplified)
+            # For full implementation, consider using moments
+            height = max_y - min_y + 1
+            width = max_x - min_x + 1
+            aspect_ratio = float(cp.maximum(height, width) / cp.maximum(cp.minimum(height, width), 1))
+            
+            # Circularity (4π * area / perimeter²)
+            circularity = 4 * cp.pi * area / cp.maximum(perimeter * perimeter, 1)
+            
+            # Create a simplified region object
+            class GPURegion:
+                def __init__(self):
+                    self.area = float(area)
+                    self.centroid = (float(centroid_y), float(centroid_x))
+                    self.bbox = (int(min_y), int(min_x), int(max_y + 1), int(max_x + 1))
+                    self.equivalent_diameter = float(equiv_diameter)
+                    self.perimeter = float(perimeter)
+                    self.eccentricity = min(0.99, float(1 - 1/aspect_ratio)) if aspect_ratio > 1 else 0.0
+                    self.label = label_id
+                    
+                    # Additional properties for compatibility
+                    self.coords = cp.column_stack([y_coords, x_coords]).get()
+                    self.circularity = float(circularity)
+                    self.aspect_ratio = float(aspect_ratio)
+            
+            properties.append(GPURegion())
+        
+        return properties
+    
     def detect_cells(self, frame, aoi_coords=None, return_debug=False):
         """
         GPU-accelerated cell detection method
@@ -278,7 +463,7 @@ class CellDetectorGPU:
         if self.gpu_available:
             gpu_gray = cp.asarray(gray_image)
             
-            # CLAHE enhancement (fallback to CPU for CLAHE as CuPy doesn't have it)
+            # Fallback to CPU CLAHE - custom GPU implementation too slow
             clahe = cv2.createCLAHE(clipLimit=self.clahe_clip_limit, 
                                    tileGridSize=(self.clahe_tile_size, self.clahe_tile_size))
             enhanced_image = clahe.apply(gray_image)
@@ -324,19 +509,13 @@ class CellDetectorGPU:
         kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         
         if self.gpu_available:
-            # Convert to CPU only for operations that require it
-            roi_seg_cpu = gpu_roi_seg.get()
-            
-            # Remove noise first (CPU operation)
-            roi_seg_cpu = morphology.remove_small_objects(roi_seg_cpu.astype(bool), min_size=self.min_object_size)
-            
-            # Move back to GPU for morphological operations
-            gpu_roi_seg_uint8 = cp.asarray(roi_seg_cpu.astype(np.uint8))
+            # Apply morphological operations on GPU
+            gpu_roi_seg_uint8 = gpu_roi_seg.astype(cp.uint8)
             gpu_roi_seg = self._gpu_morphology(gpu_roi_seg_uint8, cv2.MORPH_OPEN, kernel_small)
             gpu_roi_seg = self._gpu_morphology(gpu_roi_seg, cv2.MORPH_CLOSE, kernel_medium, iterations=1)
             
-            # Convert back to CPU for final processing (regionprops requires CPU)
-            roi_seg = (gpu_roi_seg > 0).get()
+            # Keep processing on GPU
+            roi_seg_gpu = gpu_roi_seg > 0
         else:
             # Remove noise first
             roi_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size)
@@ -347,15 +526,30 @@ class CellDetectorGPU:
             roi_seg = self._gpu_morphology(roi_seg, cv2.MORPH_CLOSE, kernel_medium, iterations=1)
             roi_seg = roi_seg > 0
         
-        # Fill small holes only
-        roi_seg = morphology.remove_small_holes(roi_seg.astype(bool), area_threshold=50)
-        
-        # Final segmentation with stricter size filtering
-        final_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size * 2)
-        
-        # Label connected components
-        labeled_image = measure.label(final_seg)
-        props = measure.regionprops(labeled_image)
+        if self.gpu_available:
+            # Convert GPU results to CPU for remaining operations (CPU regionprops is faster)
+            roi_seg_cpu = roi_seg_gpu.get()
+            
+            # Fill small holes only
+            roi_seg = morphology.remove_small_holes(roi_seg_cpu.astype(bool), area_threshold=50)
+            
+            # Final segmentation with stricter size filtering
+            final_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size * 2)
+            
+            # Label connected components (CPU is faster for this)
+            labeled_image = measure.label(final_seg)
+            props = measure.regionprops(labeled_image)
+        else:
+            # CPU fallback
+            # Fill small holes only
+            roi_seg = morphology.remove_small_holes(roi_seg.astype(bool), area_threshold=50)
+            
+            # Final segmentation with stricter size filtering
+            final_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size * 2)
+            
+            # Label connected components
+            labeled_image = measure.label(final_seg)
+            props = measure.regionprops(labeled_image)
         
         # First filtering step - more permissive to improve recall
         # Allow objects that meet basic size criteria to pass to second filter

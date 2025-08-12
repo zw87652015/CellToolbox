@@ -126,6 +126,10 @@ def detect_cells_in_roi(frame, roi_rect, params=None):
     Returns:
         List of DetectedCell objects
     """
+    # Check for empty ROI
+    if roi_rect is None or roi_rect[2] <= 0 or roi_rect[3] <= 0:
+        return []
+    
     # Default parameters if none provided
     if params is None:
         params = {
@@ -480,6 +484,9 @@ class SingleDropletApp:
             frame = np.frombuffer(self.cam_buffer, dtype=np.uint8).reshape(
                 (self.frame_height, stride, 3))[:, :self.frame_width, :]
             
+            # Rotate the frame by 180 degrees before any processing
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+            
             # Thread-safe frame buffer update
             with self.frame_lock:
                 self.frame_buffer = frame
@@ -754,15 +761,7 @@ class SingleDropletApp:
                 # Clear screen with black
                 self.pygame_screen.fill((0, 0, 0))
                 
-                # Draw debug box at center when donut view is active
-                if self.show_donuts:
-                    screen_width, screen_height = self.pygame_screen.get_size()
-                    center_x = screen_width // 2
-                    center_y = screen_height // 2
-                    box_size = 50
-                    box_x = center_x - box_size // 2
-                    box_y = center_y - box_size // 2
-                    pygame.draw.rect(self.pygame_screen, (255, 255, 255), (box_x, box_y, box_size, box_size))
+
                 
                 # Draw FOV corners from calibration data
                 try:
@@ -1155,48 +1154,81 @@ class SingleDropletApp:
                         print(f"Unknown cell structure: {cell}")
                         continue
                     
-                    # Transform camera coordinates to projector space
+                    # Use detection results directly since they're already in the rotated coordinate system
+                    # The camera view is rotated 180° to appear normal, and detection happens on this rotated view
+                    # The calibration should have been done on the same rotated view, so coordinates should match
+                    
+                    print(f"Using cell coordinates directly: {center}")
+                    
+                    # Transform camera coordinates to projector space with rotation
                     if fov_width > 0 and fov_height > 0:
-                        # Apply calibration transformation
+                        # Apply calibration transformation using detection coordinates directly
                         x_scaled = center[0] * scale
                         y_scaled = center[1] * scale
                         
-                        # Apply rotation if needed (simplified - assumes small rotation)
+                        # Debug print calibration parameters
+                        print(f"Using calibration: scale={scale}, rotation={rotation}°, offset_x={offset_x}, offset_y={offset_y}")
+                        
+                        # Determine rotation center
+                        if 'rotation_center' in self.calibration_data:
+                            rot_center_x, rot_center_y = self.calibration_data['rotation_center']
+                            print(f"Using calibration rotation center: ({rot_center_x}, {rot_center_y})")
+                        else:
+                            # Default to FOV center if not specified
+                            rot_center_x = fov_min_x + fov_width/2
+                            rot_center_y = fov_min_y + fov_height/2
+                            print(f"Using FOV center as rotation center: ({rot_center_x}, {rot_center_y})")
+                        
+                        # Apply rotation around the determined center
                         if rotation != 0:
                             import math
-                            cos_r = math.cos(math.radians(rotation))
-                            sin_r = math.sin(math.radians(rotation))
-                            x_rotated = x_scaled * cos_r - y_scaled * sin_r
-                            y_rotated = x_scaled * sin_r + y_scaled * cos_r
-                            x_scaled, y_scaled = x_rotated, y_rotated
+                            # Use negative rotation for clockwise direction
+                            cos_r = math.cos(math.radians(-rotation))
+                            sin_r = math.sin(math.radians(-rotation))
+                            
+                            # Translate to rotation center
+                            x_trans = x_scaled - rot_center_x
+                            y_trans = y_scaled - rot_center_y
+                            
+                            # Apply rotation
+                            x_rotated = x_trans * cos_r - y_trans * sin_r
+                            y_rotated = x_trans * sin_r + y_trans * cos_r
+                            
+                            # Translate back and apply offset
+                            x_final = int(x_rotated + rot_center_x + offset_x)
+                            y_final = int(y_rotated + rot_center_y + offset_y)
+                        else:
+                            # No rotation, just apply offset
+                            x_final = int(x_scaled + offset_x)
+                            y_final = int(y_scaled + offset_y)
+                        
+                        # Enhanced coordinate debugging
+                        print(f"Original: ({center[0]}, {center[1]}), Scaled: ({x_scaled:.1f}, {y_scaled:.1f}), Final: ({x_final}, {y_final})")
+                        
+                        # Scale radius to projector space
+                        scaled_radius = int(radius * scale)
+                    else:
+                        # Fallback to original transformation
+                        # Apply calibration transformations
+                        x_rot = center[0] * math.cos(math.radians(rotation)) - center[1] * math.sin(math.radians(rotation))
+                        y_rot = center[0] * math.sin(math.radians(rotation)) + center[1] * math.cos(math.radians(rotation))
+                        
+                        # Scale
+                        x_scaled = x_rot * scale
+                        y_scaled = y_rot * scale
                         
                         # Apply offset
-                        x_final = x_scaled + offset_x
-                        y_final = y_scaled + offset_y
-                        
-                        # Map to screen coordinates within FOV
-                        screen_x = int((x_final - fov_min_x) / fov_width * screen_width)
-                        screen_y = int((y_final - fov_min_y) / fov_height * screen_height)
-                        
-                        # Scale radius to screen coordinates
-                        scaled_radius = int(radius * scale * screen_width / fov_width)
-                    else:
-                        # Fallback: direct mapping without FOV transformation
-                        screen_x = int(center[0] * screen_width / self.frame_width)
-                        screen_y = int(center[1] * screen_height / self.frame_height)
-                        scaled_radius = int(radius * min(screen_width, screen_height) / min(self.frame_width, self.frame_height))
-                    
-                    # Ensure coordinates are within screen bounds
-                    screen_x = max(0, min(screen_width - 1, screen_x))
-                    screen_y = max(0, min(screen_height - 1, screen_y))
+                        x_final = int(x_scaled + offset_x)
+                        y_final = int(y_scaled + offset_y)
+                        scaled_radius = radius * scale
                     
                     # Calculate box dimensions (make it slightly larger than the cell radius)
                     box_size = max(10, scaled_radius * 2)  # Minimum 10 pixels, or 2x radius
                     box_half = box_size // 2
                     
                     # Calculate box coordinates
-                    box_x = screen_x - box_half
-                    box_y = screen_y - box_half
+                    box_x = x_final - box_half
+                    box_y = y_final - box_half
                     
                     # Ensure box stays within screen bounds
                     box_x = max(0, min(screen_width - box_size, box_x))
@@ -1206,9 +1238,9 @@ class SingleDropletApp:
                     pygame.draw.rect(self.pygame_screen, (255, 255, 255), (box_x, box_y, box_size, box_size))
                     
                     # Draw a small black center dot for precise positioning (visible on white background)
-                    pygame.draw.circle(self.pygame_screen, (0, 0, 0), (screen_x, screen_y), 3)
+                    pygame.draw.circle(self.pygame_screen, (0, 0, 0), (x_final, y_final), 3)
                     
-                    print(f"Drew cell box at screen ({screen_x}, {screen_y}) with size {box_size}x{box_size}")
+                    print(f"Drew cell box at screen ({x_final}, {y_final}) with size {box_size}x{box_size}")
                     
                 except Exception as e:
                     print(f"Error drawing individual cell box: {str(e)}")
@@ -1303,6 +1335,8 @@ class SingleDropletApp:
             if self.frame_buffer is None:
                 self.status_var.set("No frame available")
                 return
+                
+            # Make a copy of the frame for processing
             frame = self.frame_buffer.copy()
         
         try:
