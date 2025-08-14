@@ -342,6 +342,13 @@ class SingleDropletApp:
         self.pygame_initialized = False
         self.view_mode_var = tk.StringVar(value="Camera")
         
+        # Debug mode
+        self.debug_mode = False
+        self.debug_dot_camera = None  # Store debug dot position in camera coordinates
+        self.debug_dot_screen = None  # Store debug dot position in screen coordinates
+        self.debug_camera_corners = None  # Store mapped camera corners
+        self.debug_fov_corners = None  # Store FOV corners
+        
         # Load calibration data
         self.calibration_data = load_calibration_data()
         
@@ -616,6 +623,9 @@ class SingleDropletApp:
         self.display_offset_x = x_offset
         self.display_offset_y = y_offset
         
+        # Draw detected cell outlines on camera view
+        self.draw_cell_outlines_on_camera()
+        
         # Update cell info less frequently to reduce UI overhead
         if self.detection_active:
             self.root.after_idle(self.update_cell_info)
@@ -623,6 +633,69 @@ class SingleDropletApp:
     def update_camera(self):
         """Legacy method - no longer needed with ToupCam callback approach"""
         pass
+    
+    def draw_cell_outlines_on_camera(self):
+        """Draw outline boxes for detected cells on the camera view"""
+        if not hasattr(self, 'detected_cells') or not self.detected_cells:
+            return
+            
+        try:
+            # Get current display scaling factors
+            if not hasattr(self, 'display_scale') or not hasattr(self, 'display_offset_x'):
+                return
+                
+            scale = self.display_scale
+            x_offset = self.display_offset_x
+            y_offset = self.display_offset_y
+            
+            # Draw outline boxes for each detected cell
+            for i, cell in enumerate(self.detected_cells):
+                center = cell.center
+                radius = cell.radius
+                
+                # Convert cell coordinates to display coordinates
+                # Scale the coordinates to match the displayed image size
+                display_x = int(center[0] * scale) + x_offset
+                display_y = int(center[1] * scale) + y_offset
+                display_radius = int(radius * scale)
+                
+                # Create bounding box coordinates
+                x1 = display_x - display_radius
+                y1 = display_y - display_radius
+                x2 = display_x + display_radius
+                y2 = display_y + display_radius
+                
+                # Draw outline rectangle (green for detected cells)
+                self.canvas.create_rectangle(
+                    x1, y1, x2, y2,
+                    outline='lime',
+                    width=2,
+                    tags="cell_outline"
+                )
+                
+                # Draw center point
+                center_size = 3
+                self.canvas.create_oval(
+                    display_x - center_size, display_y - center_size,
+                    display_x + center_size, display_y + center_size,
+                    fill='red',
+                    outline='red',
+                    tags="cell_center"
+                )
+                
+                # Draw cell ID label
+                self.canvas.create_text(
+                    display_x, y1 - 10,
+                    text=f"Cell {i+1}",
+                    fill='yellow',
+                    font=('Arial', 8, 'bold'),
+                    tags="cell_label"
+                )
+                
+        except Exception as e:
+            print(f"Error drawing cell outlines: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def create_ui(self):
         """Create the application UI"""
@@ -648,6 +721,10 @@ class SingleDropletApp:
         ttk.Button(control_frame, text="Save Cells", command=self.save_selected_cells).pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Clear Selection", command=self.clear_selection).pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Exposure Control", command=self.open_exposure_control).pack(fill=tk.X, pady=5)
+        
+        # Debug mode button
+        self.debug_button = ttk.Button(control_frame, text="Enable Debug Mode", command=self.toggle_debug_mode)
+        self.debug_button.pack(fill=tk.X, pady=5)
         
         # View toggle button
         self.view_toggle_button = ttk.Button(control_frame, text="Switch to Donut View", command=self.toggle_view_mode)
@@ -699,29 +776,23 @@ class SingleDropletApp:
     def initialize_pygame(self):
         """Initialize pygame"""
         print("Initializing pygame...")
-        # Initialize pygame
+        # Initialize pygame directly in the main thread
         pygame.init()
+        pygame.font.init()  # Initialize font system
+        print("Initializing pygame...")
         
-        # Get projector resolution from calibration data
+        # Initialize font for text rendering
         try:
-            projector_resolution = self.calibration_data.get('projector_resolution', None)
-            if projector_resolution and isinstance(projector_resolution, dict):
-                projector_width = projector_resolution.get('width', 1024)
-                projector_height = projector_resolution.get('height', 768)
-            else:
-                # Default to 1024x768 if not available or invalid
-                projector_width, projector_height = 1024, 768
-                print(f"Warning: Using default projector resolution {projector_width}x{projector_height}")
+            self.debug_font = pygame.font.Font(None, 16)  # Default font, size 16
+            print("Font initialized successfully")
         except Exception as e:
-            # Default to 1024x768 if there's an error
-            projector_width, projector_height = 1024, 768
-            print(f"Warning: Error getting projector resolution, using default {projector_width}x{projector_height}: {str(e)}")
+            print(f"Font initialization failed: {e}")
+            self.debug_font = None
         
+        # Get projector resolution (assuming it's the main display)
+        projector_width = self.root.winfo_screenwidth()
+        projector_height = self.root.winfo_screenheight()
         print(f"Creating pygame window with resolution {projector_width}x{projector_height}")
-        
-        # Create pygame window with projector resolution
-        # Use NOFRAME for a simple window
-        os.environ['SDL_VIDEO_WINDOW_POS'] = "0,0"
         
         # Create the pygame display
         self.pygame_screen = pygame.display.set_mode((projector_width, projector_height))
@@ -775,6 +846,15 @@ class SingleDropletApp:
                 # Draw detected cells as boxes if enabled
                 if self.show_donuts and self.detected_cells:
                     self.draw_cell_boxes()
+                
+                # Draw debug elements if available
+                if self.debug_mode:
+                    # Draw debug dot if available
+                    if self.debug_dot_screen:
+                        self.draw_debug_dot_pygame()
+                    
+                    # Draw camera corners and FOV corners
+                    self.draw_debug_corners_pygame()
                 
                 # Draw donuts if enabled
                 if self.show_donuts and self.selected_cells:
@@ -860,8 +940,8 @@ class SingleDropletApp:
                                 else:
                                     # Fallback to original transformation
                                     # Apply calibration transformations
-                                    x_rot = x * math.cos(math.radians(rotation)) - y * math.sin(math.radians(rotation))
-                                    y_rot = x * math.sin(math.radians(rotation)) + y * math.cos(math.radians(rotation))
+                                    x_rot = x * math.cos(rotation) - y * math.sin(rotation)
+                                    y_rot = x * math.sin(rotation) + y * math.cos(rotation)
                                     
                                     # Scale
                                     x_scaled = x_rot * scale
@@ -1183,8 +1263,8 @@ class SingleDropletApp:
                         if rotation != 0:
                             import math
                             # Use negative rotation for clockwise direction
-                            cos_r = math.cos(math.radians(-rotation))
-                            sin_r = math.sin(math.radians(-rotation))
+                            cos_r = math.cos(-rotation)
+                            sin_r = math.sin(-rotation)
                             
                             # Translate to rotation center
                             x_trans = x_scaled - rot_center_x
@@ -1210,8 +1290,8 @@ class SingleDropletApp:
                     else:
                         # Fallback to original transformation
                         # Apply calibration transformations
-                        x_rot = center[0] * math.cos(math.radians(rotation)) - center[1] * math.sin(math.radians(rotation))
-                        y_rot = center[0] * math.sin(math.radians(rotation)) + center[1] * math.cos(math.radians(rotation))
+                        x_rot = center[0] * math.cos(rotation) - center[1] * math.sin(rotation)
+                        y_rot = center[0] * math.sin(rotation) + center[1] * math.cos(rotation)
                         
                         # Scale
                         x_scaled = x_rot * scale
@@ -1415,19 +1495,11 @@ class SingleDropletApp:
             self.donut_outer_scale = value
     
     def toggle_view_mode(self):
-        """Toggle between camera and donut view"""
+        """Toggle between camera and donut view modes"""
         current_mode = self.view_mode_var.get()
-        
         if current_mode == "Camera":
-            # Switch to Donut view
             self.view_mode_var.set("Donut")
-            self._update_view_button()
-            
-            # Enable donut display in pygame
-            self.show_donuts = True
-            
-            # Display donuts
-            self.display_donuts()
+            self.show_donut_view()
             
             # Update status
             self.status_var.set("Switched to donut view")
@@ -1450,6 +1522,451 @@ class SingleDropletApp:
             self.view_toggle_button.config(text="Switch to Donut View")
         else:
             self.view_toggle_button.config(text="Switch to Camera View")
+    
+    def toggle_debug_mode(self):
+        """Toggle debug mode for coordinate mapping testing"""
+        self.debug_mode = not self.debug_mode
+        
+        if self.debug_mode:
+            self.debug_button.config(text="Disable Debug Mode")
+            self.status_var.set("Debug mode enabled - Click on camera view to test coordinate mapping")
+            print("Debug mode enabled - Click on camera view to see mapped position in donut view")
+            
+            # Calculate and store camera corners and FOV corners
+            self.calculate_debug_corners()
+        else:
+            self.debug_button.config(text="Enable Debug Mode")
+            self.status_var.set("Debug mode disabled")
+            print("Debug mode disabled")
+            
+            # Clear debug dots
+            self.clear_debug_dots()
+    
+    def clear_debug_dots(self):
+        """Clear all debug dots from both camera and pygame views"""
+        # Clear debug dots from camera view
+        self.canvas.delete("debug_dot")
+        
+        # Clear debug dot positions
+        self.debug_dot_camera = None
+        self.debug_dot_screen = None
+        self.debug_camera_corners = None
+        self.debug_fov_corners = None
+    
+    def calculate_debug_corners(self):
+        """Calculate camera corners and FOV corners for debug visualization"""
+        try:
+            # Define camera corners (four corners of the camera view)
+            camera_corners = [
+                (0, 0),  # Top-left
+                (self.frame_width, 0),  # Top-right
+                (self.frame_width, self.frame_height),  # Bottom-right
+                (0, self.frame_height)  # Bottom-left
+            ]
+            
+            # Map camera corners to screen coordinates
+            mapped_corners = []
+            for corner in camera_corners:
+                screen_pos = self.map_camera_to_screen(corner[0], corner[1])
+                if screen_pos:
+                    mapped_corners.append({
+                        'camera': corner,
+                        'screen': screen_pos,
+                        'label': f"Cam({screen_pos[0]},{screen_pos[1]})"
+                    })
+            
+            self.debug_camera_corners = mapped_corners
+            
+            # Get FOV corners from calibration data
+            fov_corners = self.calibration_data.get('fov_corners', None)
+            if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
+                # Filter FOV corners that are within monitor bounds
+                screen_width = self.pygame_screen.get_width() if hasattr(self, 'pygame_screen') else 2560
+                screen_height = self.pygame_screen.get_height() if hasattr(self, 'pygame_screen') else 1600
+                
+                valid_fov_corners = []
+                for i, corner in enumerate(fov_corners):
+                    x, y = corner[0], corner[1]
+                    if 0 <= x <= screen_width and 0 <= y <= screen_height:
+                        valid_fov_corners.append({
+                            'screen': (int(x), int(y)),
+                            'label': f"FOV{i+1}({int(x)},{int(y)})"
+                        })
+                
+                self.debug_fov_corners = valid_fov_corners
+            
+            print(f"Debug corners calculated: {len(mapped_corners)} camera corners, {len(self.debug_fov_corners) if self.debug_fov_corners else 0} FOV corners")
+            
+        except Exception as e:
+            print(f"Error calculating debug corners: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def map_camera_to_screen(self, camera_x, camera_y):
+        """Map camera coordinates to screen coordinates using calibration data"""
+        try:
+            # Get calibration data for coordinate transformation
+            scale = self.calibration_data.get('scale', 1.0)
+            rotation = self.calibration_data.get('rotation', 0.0)
+            offset_x = self.calibration_data.get('offset_x', 0)
+            offset_y = self.calibration_data.get('offset_y', 0)
+            
+            # Get FOV corners for scaling reference
+            fov_corners = self.calibration_data.get('fov_corners', None)
+            
+            # Calculate FOV bounds if available
+            fov_min_x, fov_min_y, fov_max_x, fov_max_y = 0, 0, 0, 0
+            fov_width, fov_height = 0, 0
+            
+            if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
+                # Extract x and y coordinates
+                x_coords = [corner[0] for corner in fov_corners]
+                y_coords = [corner[1] for corner in fov_corners]
+                
+                # Calculate bounds
+                fov_min_x = min(x_coords)
+                fov_max_x = max(x_coords)
+                fov_min_y = min(y_coords)
+                fov_max_y = max(y_coords)
+                
+                fov_width = fov_max_x - fov_min_x
+                fov_height = fov_max_y - fov_min_y
+            
+            # Transform camera coordinates to projector space with rotation
+            if fov_width > 0 and fov_height > 0:
+                # Apply calibration transformation
+                x_scaled = camera_x * scale
+                y_scaled = camera_y * scale
+                
+                # Determine rotation center
+                if 'rotation_center' in self.calibration_data:
+                    rot_center_x, rot_center_y = self.calibration_data['rotation_center']
+                else:
+                    # Default to FOV center if not specified
+                    rot_center_x = fov_min_x + fov_width/2
+                    rot_center_y = fov_min_y + fov_height/2
+                
+                # Apply rotation around the determined center
+                if rotation != 0:
+                    import math
+                    # Use negative rotation for clockwise direction
+                    cos_r = math.cos(-rotation)
+                    sin_r = math.sin(-rotation)
+                    
+                    # Translate to rotation center
+                    x_trans = x_scaled - rot_center_x
+                    y_trans = y_scaled - rot_center_y
+                    
+                    # Apply rotation
+                    x_rotated = x_trans * cos_r - y_trans * sin_r
+                    y_rotated = x_trans * sin_r + y_trans * cos_r
+                    
+                    # Translate back and apply offset
+                    x_final = int(x_rotated + rot_center_x + offset_x)
+                    y_final = int(y_rotated + rot_center_y + offset_y)
+                else:
+                    # No rotation, just apply offset
+                    x_final = int(x_scaled + offset_x)
+                    y_final = int(y_scaled + offset_y)
+                
+                return (x_final, y_final)
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error mapping camera to screen: {str(e)}")
+            return None
+    
+    def on_mouse_down(self, event):
+        """Handle mouse button press on camera canvas"""
+        if self.debug_mode:
+            # Debug mode: handle coordinate mapping test
+            self.handle_debug_click(event)
+        else:
+            # Normal mode: handle cell selection (if needed)
+            pass
+    
+    def on_mouse_move(self, event):
+        """Handle mouse movement on camera canvas"""
+        # Currently not used, but required for the binding
+        pass
+    
+    def on_mouse_up(self, event):
+        """Handle mouse button release on camera canvas"""
+        # Currently not used, but required for the binding
+        pass
+    
+    def handle_debug_click(self, event):
+        """Handle debug mode click to show coordinate mapping"""
+        try:
+            # Get click coordinates relative to canvas
+            canvas_x = event.x
+            canvas_y = event.y
+            
+            # Convert canvas coordinates to camera coordinates
+            if not hasattr(self, 'display_scale') or not hasattr(self, 'display_offset_x'):
+                print("Display scaling not available yet")
+                return
+            
+            # Convert from display coordinates to camera coordinates
+            camera_x = (canvas_x - self.display_offset_x) / self.display_scale
+            camera_y = (canvas_y - self.display_offset_y) / self.display_scale
+            
+            # Ensure coordinates are within camera bounds
+            camera_x = max(0, min(camera_x, self.frame_width))
+            camera_y = max(0, min(camera_y, self.frame_height))
+            
+            print(f"Debug click: Canvas({canvas_x}, {canvas_y}) -> Camera({camera_x:.1f}, {camera_y:.1f})")
+            
+            # Clear previous debug dots
+            self.clear_debug_dots()
+            
+            # Store camera coordinates for mapping
+            self.debug_dot_camera = (camera_x, camera_y)
+            
+            # Draw debug dot on camera view
+            self.draw_debug_dot_camera(canvas_x, canvas_y)
+            
+            # Map to pygame coordinates and draw there
+            self.map_and_draw_debug_dot_pygame(camera_x, camera_y)
+            
+        except Exception as e:
+            print(f"Error in debug click handler: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def draw_debug_dot_camera(self, canvas_x, canvas_y):
+        """Draw debug dot on camera view"""
+        dot_size = 8
+        self.canvas.create_oval(
+            canvas_x - dot_size, canvas_y - dot_size,
+            canvas_x + dot_size, canvas_y + dot_size,
+            fill='white',
+            outline='black',
+            width=2,
+            tags="debug_dot"
+        )
+        
+        # Add label
+        self.canvas.create_text(
+            canvas_x, canvas_y - 15,
+            text="DEBUG",
+            fill='white',
+            font=('Arial', 8, 'bold'),
+            tags="debug_dot"
+        )
+    
+    def map_and_draw_debug_dot_pygame(self, camera_x, camera_y):
+        """Map camera coordinates to pygame and draw debug dot"""
+        try:
+            # Get calibration data for coordinate transformation
+            scale = self.calibration_data.get('scale', 1.0)
+            rotation = self.calibration_data.get('rotation', 0.0)
+            offset_x = self.calibration_data.get('offset_x', 0)
+            offset_y = self.calibration_data.get('offset_y', 0)
+            
+            # Get FOV corners for scaling reference
+            fov_corners = self.calibration_data.get('fov_corners', None)
+            
+            # Calculate FOV bounds if available
+            fov_min_x, fov_min_y, fov_max_x, fov_max_y = 0, 0, 0, 0
+            fov_width, fov_height = 0, 0
+            
+            if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
+                # Extract x and y coordinates
+                x_coords = [corner[0] for corner in fov_corners]
+                y_coords = [corner[1] for corner in fov_corners]
+                
+                # Calculate bounds
+                fov_min_x = min(x_coords)
+                fov_max_x = max(x_coords)
+                fov_min_y = min(y_coords)
+                fov_max_y = max(y_coords)
+                
+                fov_width = fov_max_x - fov_min_x
+                fov_height = fov_max_y - fov_min_y
+            
+            # Transform camera coordinates to projector space with rotation
+            if fov_width > 0 and fov_height > 0:
+                # Apply calibration transformation
+                x_scaled = camera_x * scale
+                y_scaled = camera_y * scale
+                
+                # Determine rotation center
+                if 'rotation_center' in self.calibration_data:
+                    rot_center_x, rot_center_y = self.calibration_data['rotation_center']
+                else:
+                    # Default to FOV center if not specified
+                    rot_center_x = fov_min_x + fov_width/2
+                    rot_center_y = fov_min_y + fov_height/2
+                
+                # Apply rotation around the determined center
+                if rotation != 0:
+                    import math
+                    # Use negative rotation for clockwise direction
+                    cos_r = math.cos(-rotation)
+                    sin_r = math.sin(-rotation)
+                    
+                    # Translate to rotation center
+                    x_trans = x_scaled - rot_center_x
+                    y_trans = y_scaled - rot_center_y
+                    
+                    # Apply rotation
+                    x_rotated = x_trans * cos_r - y_trans * sin_r
+                    y_rotated = x_trans * sin_r + y_trans * cos_r
+                    
+                    # Translate back and apply offset
+                    x_final = int(x_rotated + rot_center_x + offset_x)
+                    y_final = int(y_rotated + rot_center_y + offset_y)
+                else:
+                    # No rotation, just apply offset
+                    x_final = int(x_scaled + offset_x)
+                    y_final = int(y_scaled + offset_y)
+                
+                # Store screen coordinates for pygame drawing
+                self.debug_dot_screen = (x_final, y_final)
+                
+                print(f"Debug mapping: Camera({camera_x:.1f}, {camera_y:.1f}) -> Screen({x_final}, {y_final})")
+                
+        except Exception as e:
+            print(f"Error mapping debug dot: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def draw_debug_dot_pygame(self):
+        """Draw debug dot on pygame screen"""
+        if not self.debug_dot_screen:
+            return
+            
+        try:
+            x, y = self.debug_dot_screen
+            
+            # Draw large white circle with black border for high visibility
+            dot_radius = 15
+            pygame.draw.circle(self.pygame_screen, (255, 255, 255), (x, y), dot_radius)
+            pygame.draw.circle(self.pygame_screen, (0, 0, 0), (x, y), dot_radius, 3)
+            
+            # Draw center cross for precise positioning
+            cross_size = 8
+            pygame.draw.line(self.pygame_screen, (255, 0, 0), 
+                           (x - cross_size, y), (x + cross_size, y), 2)
+            pygame.draw.line(self.pygame_screen, (255, 0, 0), 
+                           (x, y - cross_size), (x, y + cross_size), 2)
+            
+            # Draw coordinate text
+            if hasattr(self, 'debug_dot_camera') and self.debug_dot_camera:
+                cam_x, cam_y = self.debug_dot_camera
+                coord_text = f"Cam({cam_x:.0f},{cam_y:.0f})->Scr({x},{y})"
+                
+                # Create text surface (pygame doesn't have built-in font rendering)
+                # We'll draw a simple text representation using rectangles
+                text_y = y - 35
+                
+                # Draw background rectangle for text visibility
+                text_bg_rect = pygame.Rect(x - 80, text_y - 5, 160, 20)
+                pygame.draw.rect(self.pygame_screen, (0, 0, 0), text_bg_rect)
+                pygame.draw.rect(self.pygame_screen, (255, 255, 255), text_bg_rect, 1)
+                
+                print(f"Debug dot drawn at pygame coordinates: ({x}, {y})")
+                
+        except Exception as e:
+            print(f"Error drawing debug dot on pygame: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def draw_debug_corners_pygame(self):
+        """Draw camera corners and FOV corners on pygame screen"""
+        try:
+            # Draw camera corners (yellow dots)
+            if self.debug_camera_corners:
+                for corner in self.debug_camera_corners:
+                    x, y = corner['screen']
+                    label = corner['label']
+                    
+                    # Check if corner is within screen bounds
+                    if hasattr(self, 'pygame_screen'):
+                        screen_width = self.pygame_screen.get_width()
+                        screen_height = self.pygame_screen.get_height()
+                        
+                        if 0 <= x <= screen_width and 0 <= y <= screen_height:
+                            # Draw yellow circle for camera corners
+                            corner_radius = 12
+                            pygame.draw.circle(self.pygame_screen, (255, 255, 0), (x, y), corner_radius)
+                            pygame.draw.circle(self.pygame_screen, (0, 0, 0), (x, y), corner_radius, 2)
+                            
+                            # Draw center dot
+                            pygame.draw.circle(self.pygame_screen, (0, 0, 0), (x, y), 3)
+                            
+                            # Draw text label with coordinates
+                            if hasattr(self, 'debug_font') and self.debug_font:
+                                # Create text surface
+                                text_surface = self.debug_font.render(label, True, (255, 255, 255))  # White text
+                                text_rect = text_surface.get_rect()
+                                
+                                # Position text above the corner
+                                text_x = x - text_rect.width // 2
+                                text_y = y - corner_radius - text_rect.height - 5
+                                
+                                # Ensure text is within screen bounds
+                                text_x = max(5, min(text_x, screen_width - text_rect.width - 5))
+                                text_y = max(5, text_y)
+                                
+                                # Draw background rectangle for better visibility
+                                bg_rect = pygame.Rect(text_x - 2, text_y - 2, text_rect.width + 4, text_rect.height + 4)
+                                pygame.draw.rect(self.pygame_screen, (0, 0, 0), bg_rect)  # Black background
+                                pygame.draw.rect(self.pygame_screen, (255, 255, 0), bg_rect, 1)  # Yellow border
+                                
+                                # Draw the text
+                                self.pygame_screen.blit(text_surface, (text_x, text_y))
+                            
+                            print(f"Camera corner drawn: {label} at ({x}, {y})")
+            
+            # Draw FOV corners (cyan dots)
+            if self.debug_fov_corners:
+                for corner in self.debug_fov_corners:
+                    x, y = corner['screen']
+                    label = corner['label']
+                    
+                    # Draw cyan circle for FOV corners
+                    corner_radius = 10
+                    pygame.draw.circle(self.pygame_screen, (0, 255, 255), (x, y), corner_radius)
+                    pygame.draw.circle(self.pygame_screen, (0, 0, 0), (x, y), corner_radius, 2)
+                    
+                    # Draw center dot
+                    pygame.draw.circle(self.pygame_screen, (0, 0, 0), (x, y), 2)
+                    
+                    # Draw text label with coordinates
+                    if hasattr(self, 'debug_font') and self.debug_font:
+                        # Create text surface
+                        text_surface = self.debug_font.render(label, True, (255, 255, 255))  # White text
+                        text_rect = text_surface.get_rect()
+                        
+                        # Position text below the corner
+                        text_x = x - text_rect.width // 2
+                        text_y = y + corner_radius + 5
+                        
+                        # Ensure text is within screen bounds
+                        if hasattr(self, 'pygame_screen'):
+                            screen_width = self.pygame_screen.get_width()
+                            screen_height = self.pygame_screen.get_height()
+                            
+                            text_x = max(5, min(text_x, screen_width - text_rect.width - 5))
+                            text_y = min(text_y, screen_height - text_rect.height - 5)
+                        
+                        # Draw background rectangle for better visibility
+                        bg_rect = pygame.Rect(text_x - 2, text_y - 2, text_rect.width + 4, text_rect.height + 4)
+                        pygame.draw.rect(self.pygame_screen, (0, 0, 0), bg_rect)  # Black background
+                        pygame.draw.rect(self.pygame_screen, (0, 255, 255), bg_rect, 1)  # Cyan border
+                        
+                        # Draw the text
+                        self.pygame_screen.blit(text_surface, (text_x, text_y))
+                    
+                    print(f"FOV corner drawn: {label} at ({x}, {y})")
+                    
+        except Exception as e:
+            print(f"Error drawing debug corners on pygame: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def on_close(self):
         """Handle window close event"""
