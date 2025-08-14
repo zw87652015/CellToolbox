@@ -882,8 +882,6 @@ class SingleDropletApp:
                 # Clear screen with black
                 self.pygame_screen.fill((0, 0, 0))
                 
-
-                
                 # Draw FOV corners from calibration data
                 try:
                     fov_corners = self.calibration_data.get('fov_corners', None)
@@ -934,6 +932,22 @@ class SingleDropletApp:
                             fov_max_y = max(y_coords)
                             
                             # Calculate dimensions
+                            fov_width = fov_max_x - fov_min_x
+                            fov_height = fov_max_y - fov_min_y
+                        
+                        # Get camera and projector resolutions
+                        cam_width = self.calibration_data.get('camera_resolution', {}).get('width', self.frame_width)
+                        cam_height = self.calibration_data.get('camera_resolution', {}).get('height', self.frame_height)
+                        
+                        # Extract FOV corners and compute dimensions
+                        fov_corners = self.calibration_data.get('fov_corners', None)
+                        if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
+                            x_coords = [corner[0] for corner in fov_corners]
+                            y_coords = [corner[1] for corner in fov_corners]
+                            fov_min_x = min(x_coords)
+                            fov_max_x = max(x_coords)
+                            fov_min_y = min(y_coords)
+                            fov_max_y = max(y_coords)
                             fov_width = fov_max_x - fov_min_x
                             fov_height = fov_max_y - fov_min_y
                         
@@ -1249,7 +1263,7 @@ class SingleDropletApp:
             self.status_var.set(f"Error detecting cells: {str(e)}")
             import traceback
             traceback.print_exc()
-
+    
     def draw_cell_boxes(self):
         """Draw rectangular boxes for detected cells at their corresponding positions"""
         try:
@@ -1277,7 +1291,6 @@ class SingleDropletApp:
                 fov_min_y = min(y_coords)
                 fov_max_y = max(y_coords)
                 
-                # Calculate dimensions
                 fov_width = fov_max_x - fov_min_x
                 fov_height = fov_max_y - fov_min_y
             
