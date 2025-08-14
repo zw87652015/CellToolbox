@@ -626,6 +626,9 @@ class SingleDropletApp:
         # Draw detected cell outlines on camera view
         self.draw_cell_outlines_on_camera()
         
+        # Draw ROI rectangle if set
+        self.draw_persistent_roi()
+        
         # Update cell info less frequently to reduce UI overhead
         if self.detection_active:
             self.root.after_idle(self.update_cell_info)
@@ -697,6 +700,52 @@ class SingleDropletApp:
             import traceback
             traceback.print_exc()
     
+    def draw_persistent_roi(self):
+        """Draw persistent ROI rectangle on camera view"""
+        if not self.rect:
+            return
+            
+        try:
+            # Get current display scaling factors
+            if not hasattr(self, 'display_scale') or not hasattr(self, 'display_offset_x'):
+                return
+                
+            scale = self.display_scale
+            x_offset = self.display_offset_x
+            y_offset = self.display_offset_y
+            
+            # Convert ROI from camera coordinates to display coordinates
+            roi_x, roi_y, roi_width, roi_height = self.rect
+            
+            # Scale and offset the ROI coordinates
+            display_x = int(roi_x * scale) + x_offset
+            display_y = int(roi_y * scale) + y_offset
+            display_width = int(roi_width * scale)
+            display_height = int(roi_height * scale)
+            
+            # Draw ROI rectangle outline
+            self.canvas.create_rectangle(
+                display_x, display_y,
+                display_x + display_width, display_y + display_height,
+                outline='red',
+                width=2,
+                tags="persistent_roi"
+            )
+            
+            # Add ROI label
+            self.canvas.create_text(
+                display_x + 5, display_y - 15,
+                text=f"ROI: {roi_width}x{roi_height}",
+                fill='red',
+                font=('Arial', 8, 'bold'),
+                tags="persistent_roi"
+            )
+            
+        except Exception as e:
+            print(f"Error drawing persistent ROI: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
     def create_ui(self):
         """Create the application UI"""
         # Create frames
@@ -720,6 +769,7 @@ class SingleDropletApp:
         ttk.Button(control_frame, text="Detect Cells", command=self.toggle_detection).pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Save Cells", command=self.save_selected_cells).pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Clear Selection", command=self.clear_selection).pack(fill=tk.X, pady=5)
+        ttk.Button(control_frame, text="Clear ROI", command=self.clear_roi).pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Exposure Control", command=self.open_exposure_control).pack(fill=tk.X, pady=5)
         
         # Debug mode button
@@ -1683,18 +1733,103 @@ class SingleDropletApp:
             # Debug mode: handle coordinate mapping test
             self.handle_debug_click(event)
         else:
-            # Normal mode: handle cell selection (if needed)
-            pass
+            # Normal mode: start ROI drawing
+            self.rect_start = (event.x, event.y)
+            self.rect_end = None
+            self.rect = None
     
     def on_mouse_move(self, event):
         """Handle mouse movement on camera canvas"""
-        # Currently not used, but required for the binding
-        pass
+        if not self.debug_mode and self.rect_start:
+            # Update ROI rectangle during dragging
+            self.rect_end = (event.x, event.y)
+            self.draw_roi_rectangle()
     
     def on_mouse_up(self, event):
         """Handle mouse button release on camera canvas"""
-        # Currently not used, but required for the binding
-        pass
+        if not self.debug_mode and self.rect_start:
+            # Finalize ROI rectangle
+            self.rect_end = (event.x, event.y)
+            self.finalize_roi_rectangle()
+    
+    def draw_roi_rectangle(self):
+        """Draw ROI rectangle on canvas during mouse drag"""
+        if not self.rect_start or not self.rect_end:
+            return
+            
+        # Clear previous rectangle
+        self.canvas.delete("roi_rect")
+        
+        # Draw new rectangle
+        x1, y1 = self.rect_start
+        x2, y2 = self.rect_end
+        
+        # Ensure proper rectangle coordinates
+        left = min(x1, x2)
+        top = min(y1, y2)
+        right = max(x1, x2)
+        bottom = max(y1, y2)
+        
+        # Draw rectangle outline
+        self.canvas.create_rectangle(
+            left, top, right, bottom,
+            outline='red',
+            width=2,
+            tags="roi_rect"
+        )
+    
+    def finalize_roi_rectangle(self):
+        """Finalize ROI rectangle and convert to camera coordinates"""
+        if not self.rect_start or not self.rect_end:
+            return
+            
+        # Get canvas coordinates
+        x1, y1 = self.rect_start
+        x2, y2 = self.rect_end
+        
+        # Ensure proper rectangle coordinates
+        left = min(x1, x2)
+        top = min(y1, y2)
+        right = max(x1, x2)
+        bottom = max(y1, y2)
+        
+        # Convert to camera coordinates if display scaling is available
+        if hasattr(self, 'display_scale') and hasattr(self, 'display_offset_x'):
+            # Convert from display coordinates to camera coordinates
+            cam_left = (left - self.display_offset_x) / self.display_scale
+            cam_top = (top - self.display_offset_y) / self.display_scale
+            cam_right = (right - self.display_offset_x) / self.display_scale
+            cam_bottom = (bottom - self.display_offset_y) / self.display_scale
+            
+            # Ensure coordinates are within camera bounds
+            cam_left = max(0, min(cam_left, self.frame_width))
+            cam_top = max(0, min(cam_top, self.frame_height))
+            cam_right = max(0, min(cam_right, self.frame_width))
+            cam_bottom = max(0, min(cam_bottom, self.frame_height))
+            
+            # Calculate width and height
+            width = int(cam_right - cam_left)
+            height = int(cam_bottom - cam_top)
+            
+            # Store ROI rectangle in camera coordinates
+            if width > 10 and height > 10:  # Minimum size check
+                self.rect = (int(cam_left), int(cam_top), width, height)
+                print(f"ROI set: x={int(cam_left)}, y={int(cam_top)}, w={width}, h={height}")
+                self.status_var.set(f"ROI set: {width}x{height} at ({int(cam_left)}, {int(cam_top)})")
+            else:
+                print("ROI too small, ignored")
+                self.status_var.set("ROI too small, please draw a larger area")
+                self.canvas.delete("roi_rect")
+        else:
+            print("Display scaling not available for ROI conversion")
+    
+    def clear_roi(self):
+        """Clear the current ROI"""
+        self.rect = None
+        self.rect_start = None
+        self.rect_end = None
+        self.canvas.delete("roi_rect")
+        self.status_var.set("ROI cleared")
     
     def handle_debug_click(self, event):
         """Handle debug mode click to show coordinate mapping"""
