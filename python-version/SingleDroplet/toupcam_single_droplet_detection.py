@@ -970,21 +970,40 @@ class SingleDropletApp:
                                     print(f"Invalid center format: {center}")
                                     continue
                                 
-                                # Map camera coordinates directly to FOV space
-                                if fov_width > 0 and fov_height > 0 and cam_width > 0 and cam_height > 0:
-                                    # Normalize camera coordinates (0-1)
-                                    x_norm = x / cam_width
-                                    y_norm = y / cam_height
+                                # Map camera coordinates to FOV space with rotation
+                                if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4 and cam_width > 0 and cam_height > 0:
+                                    # First apply rotation to camera coordinates
+                                    x_rot = x * math.cos(rotation) - y * math.sin(rotation)
+                                    y_rot = x * math.sin(rotation) + y * math.cos(rotation)
                                     
-                                    # Map to FOV space
-                                    x_final = int(fov_min_x + x_norm * fov_width)
-                                    y_final = int(fov_min_y + y_norm * fov_height)
+                                    # Normalize rotated coordinates (0-1)
+                                    x_norm = x_rot / cam_width
+                                    y_norm = y_rot / cam_height
                                     
-                                    # Ensure coordinates are within FOV bounds
-                                    x_final = max(fov_min_x, min(x_final, fov_max_x))
-                                    y_final = max(fov_min_y, min(y_final, fov_max_y))
+                                    # Clamp normalized coordinates to [0,1]
+                                    x_norm = max(0, min(1, x_norm))
+                                    y_norm = max(0, min(1, y_norm))
                                     
-                                    # Scale radius relative to FOV
+                                    # Extract FOV corners in order: top-left, top-right, bottom-right, bottom-left
+                                    fov_tl = fov_corners[0]  # top-left
+                                    fov_tr = fov_corners[1]  # top-right
+                                    fov_br = fov_corners[2]  # bottom-right
+                                    fov_bl = fov_corners[3]  # bottom-left
+                                    
+                                    # Bilinear interpolation within the FOV quadrilateral
+                                    # Interpolate along top edge (y=0)
+                                    top_x = fov_tl[0] + x_norm * (fov_tr[0] - fov_tl[0])
+                                    top_y = fov_tl[1] + x_norm * (fov_tr[1] - fov_tl[1])
+                                    
+                                    # Interpolate along bottom edge (y=1)
+                                    bottom_x = fov_bl[0] + x_norm * (fov_br[0] - fov_bl[0])
+                                    bottom_y = fov_bl[1] + x_norm * (fov_br[1] - fov_bl[1])
+                                    
+                                    # Final interpolation between top and bottom edges
+                                    x_final = int(top_x + y_norm * (bottom_x - top_x))
+                                    y_final = int(top_y + y_norm * (bottom_y - top_y))
+                                    
+                                    # Scale radius relative to FOV dimensions
                                     radius_scale = min(fov_width, fov_height) / 20  # Adjust this factor as needed
                                     scaled_radius = radius * (radius_scale / 100)
                                 else:
