@@ -95,10 +95,11 @@ class DetectedCell:
             "bbox": self.bbox
         }
 
+
 def load_calibration_data():
     """Load the latest calibration data"""
     try:
-        with open('E:/Documents/Codes/Matlab/CellToolbox/python-version/calibration/latest_calibration.json', 'r') as f:
+        with open('d:/Documents/Codes/CellToolbox/python-version/calibration/latest_calibration.json', 'r') as f:
             data = json.load(f)
             required_fields = ['scale', 'rotation', 'offset_x', 'offset_y', 
                              'camera_resolution', 'projector_resolution', 'fov_corners']
@@ -906,74 +907,24 @@ class SingleDropletApp:
                 
                 # Draw donuts if enabled
                 if self.show_donuts and self.selected_cells:
-                    # Get calibration data
                     try:
-                        scale = self.calibration_data.get('scale', 1.0)
-                        rotation = self.calibration_data.get('rotation', 0.0)
-                        offset_x = self.calibration_data.get('offset_x', 0)
-                        offset_y = self.calibration_data.get('offset_y', 0)
-                        
-                        # Get FOV corners for scaling reference
-                        fov_corners = self.calibration_data.get('fov_corners', None)
-                        
-                        # Calculate FOV bounds if available
-                        fov_min_x, fov_min_y, fov_max_x, fov_max_y = 0, 0, 0, 0
-                        fov_width, fov_height = 0, 0
-                        
-                        if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
-                            # Extract x and y coordinates
-                            x_coords = [corner[0] for corner in fov_corners]
-                            y_coords = [corner[1] for corner in fov_corners]
-                            
-                            # Calculate bounds
-                            fov_min_x = min(x_coords)
-                            fov_max_x = max(x_coords)
-                            fov_min_y = min(y_coords)
-                            fov_max_y = max(y_coords)
-                            
-                            # Calculate dimensions
-                            fov_width = fov_max_x - fov_min_x
-                            fov_height = fov_max_y - fov_min_y
-                        
-                        # Get camera and projector resolutions
+                        # Get camera resolution for homography mapping
                         cam_width = self.calibration_data.get('camera_resolution', {}).get('width', self.frame_width)
                         cam_height = self.calibration_data.get('camera_resolution', {}).get('height', self.frame_height)
                         
-                        # Extract FOV corners and compute dimensions
-                        fov_corners = self.calibration_data.get('fov_corners', None)
-                        if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
-                            x_coords = [corner[0] for corner in fov_corners]
-                            y_coords = [corner[1] for corner in fov_corners]
-                            fov_min_x = min(x_coords)
-                            fov_max_x = max(x_coords)
-                            fov_min_y = min(y_coords)
-                            fov_max_y = max(y_coords)
-                            fov_width = fov_max_x - fov_min_x
-                            fov_height = fov_max_y - fov_min_y
-                        
-                        # Get camera and projector resolutions
-                        cam_width = self.calibration_data.get('camera_resolution', {}).get('width', self.frame_width)
-                        cam_height = self.calibration_data.get('camera_resolution', {}).get('height', self.frame_height)
-                        
-                        # Print debug info
                         print(f"Selected cells: {len(self.selected_cells)}")
-                        print(f"FOV bounds: ({fov_min_x}, {fov_min_y}) to ({fov_max_x}, {fov_max_y})")
                         print(f"Camera resolution: {cam_width}x{cam_height}")
                         
                         # Draw each cell as a donut
                         for cell in self.selected_cells:
                             try:
                                 # Get cell center and radius
-                                # Check cell structure - it could be a tuple or an object
                                 if hasattr(cell, 'center') and hasattr(cell, 'radius'):
-                                    # Cell is an object with center and radius attributes
                                     center = cell.center
                                     radius = cell.radius
                                 elif isinstance(cell, tuple) and len(cell) == 2:
-                                    # Cell is a tuple of ((x, y), radius)
                                     center, radius = cell
                                 else:
-                                    # Unknown structure, print and skip
                                     print(f"Unknown cell structure: {cell}")
                                     continue
                                 
@@ -984,73 +935,47 @@ class SingleDropletApp:
                                     print(f"Invalid center format: {center}")
                                     continue
                                 
-                                # Map camera coordinates to FOV space with rotation
-                                if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4 and cam_width > 0 and cam_height > 0:
-                                    # First apply rotation to camera coordinates
-                                    x_rot = x * math.cos(rotation) - y * math.sin(rotation)
-                                    y_rot = x * math.sin(rotation) + y * math.cos(rotation)
+                                # Map camera coordinates using vector-based transformation
+                                result = self.map_camera_to_screen(x, y)
+                                if result:
+                                    x_final, y_final = result
                                     
-                                    # Normalize rotated coordinates (0-1)
-                                    x_norm = x_rot / cam_width
-                                    y_norm = y_rot / cam_height
+                                    # Calculate radius scaling based on FOV dimensions
+                                    fov_corners = self.calibration_data.get('fov_corners', None)
+                                    if fov_corners and len(fov_corners) >= 4:
+                                        # Estimate FOV scale from corner distances
+                                        TL = fov_corners[0]
+                                        TR = fov_corners[1]
+                                        BL = fov_corners[3]
+                                        
+                                        # Calculate average scale factor from both vectors
+                                        vec_x_len = ((TR[0] - TL[0])**2 + (TR[1] - TL[1])**2)**0.5
+                                        vec_y_len = ((BL[0] - TL[0])**2 + (BL[1] - TL[1])**2)**0.5
+                                        avg_scale = (vec_x_len + vec_y_len) / (cam_width + cam_height)
+                                        
+                                        scaled_radius = radius * avg_scale
+                                    else:
+                                        scaled_radius = radius * 0.5  # Default scaling
                                     
-                                    # Clamp normalized coordinates to [0,1]
-                                    x_norm = max(0, min(1, x_norm))
-                                    y_norm = max(0, min(1, y_norm))
+                                    # Calculate inner and outer radii
+                                    inner_radius = int(scaled_radius * self.donut_inner_scale)
+                                    outer_radius = int(scaled_radius * self.donut_outer_scale)
                                     
-                                    # Extract FOV corners in order: top-left, top-right, bottom-right, bottom-left
-                                    fov_tl = fov_corners[0]  # top-left
-                                    fov_tr = fov_corners[1]  # top-right
-                                    fov_br = fov_corners[2]  # bottom-right
-                                    fov_bl = fov_corners[3]  # bottom-left
+                                    # Ensure radius is reasonable (use screen dimensions)
+                                    max_radius = min(self.pygame_screen.get_width(), self.pygame_screen.get_height()) // 20
+                                    outer_radius = min(outer_radius, max_radius)
+                                    inner_radius = min(inner_radius, outer_radius - 1)
                                     
-                                    # Bilinear interpolation within the FOV quadrilateral
-                                    # Interpolate along top edge (y=0)
-                                    top_x = fov_tl[0] + x_norm * (fov_tr[0] - fov_tl[0])
-                                    top_y = fov_tl[1] + x_norm * (fov_tr[1] - fov_tl[1])
+                                    # Draw outer circle (filled white)
+                                    pygame.draw.circle(self.pygame_screen, (255, 255, 255), (x_final, y_final), outer_radius)
                                     
-                                    # Interpolate along bottom edge (y=1)
-                                    bottom_x = fov_bl[0] + x_norm * (fov_br[0] - fov_bl[0])
-                                    bottom_y = fov_bl[1] + x_norm * (fov_br[1] - fov_bl[1])
+                                    # Draw inner circle (filled black) to create donut effect
+                                    pygame.draw.circle(self.pygame_screen, (0, 0, 0), (x_final, y_final), inner_radius)
                                     
-                                    # Final interpolation between top and bottom edges
-                                    x_final = int(top_x + y_norm * (bottom_x - top_x))
-                                    y_final = int(top_y + y_norm * (bottom_y - top_y))
-                                    
-                                    # Scale radius relative to FOV dimensions
-                                    radius_scale = min(fov_width, fov_height) / 20  # Adjust this factor as needed
-                                    scaled_radius = radius * (radius_scale / 100)
+                                    print(f"Drawing donut at ({x_final}, {y_final}) with inner radius {inner_radius} and outer radius {outer_radius}")
                                 else:
-                                    # Fallback to original transformation
-                                    # Apply calibration transformations
-                                    x_rot = x * math.cos(rotation) - y * math.sin(rotation)
-                                    y_rot = x * math.sin(rotation) + y * math.cos(rotation)
+                                    print("Vector mapping not available for cell mapping")
                                     
-                                    # Scale
-                                    x_scaled = x_rot * scale
-                                    y_scaled = y_rot * scale
-                                    
-                                    # Apply offset
-                                    x_final = int(x_scaled + offset_x)
-                                    y_final = int(y_scaled + offset_y)
-                                    scaled_radius = radius * scale
-                                
-                                # Calculate inner and outer radii
-                                inner_radius = int(scaled_radius * self.donut_inner_scale)
-                                outer_radius = int(scaled_radius * self.donut_outer_scale)
-                                
-                                # Ensure radius is reasonable
-                                max_radius = min(fov_width, fov_height) // 10
-                                outer_radius = min(outer_radius, max_radius)
-                                inner_radius = min(inner_radius, outer_radius - 1)
-                                
-                                # Draw outer circle (filled white)
-                                pygame.draw.circle(self.pygame_screen, (255, 255, 255), (x_final, y_final), outer_radius)
-                                
-                                # Draw inner circle (filled black) to create donut effect
-                                pygame.draw.circle(self.pygame_screen, (0, 0, 0), (x_final, y_final), inner_radius)
-                                
-                                print(f"Drawing donut at ({x_final}, {y_final}) with inner radius {inner_radius} and outer radius {outer_radius}")
                             except Exception as e:
                                 print(f"Error drawing individual cell: {str(e)}")
                                 import traceback
@@ -1685,75 +1610,44 @@ class SingleDropletApp:
             traceback.print_exc()
     
     def map_camera_to_screen(self, camera_x, camera_y):
-        """Map camera coordinates to screen coordinates using calibration data"""
+        """Map camera coordinates to screen coordinates using vector-based linear transformation"""
         try:
-            # Get calibration data for coordinate transformation
-            scale = self.calibration_data.get('scale', 1.0)
-            rotation = self.calibration_data.get('rotation', 0.0)
-            offset_x = self.calibration_data.get('offset_x', 0)
-            offset_y = self.calibration_data.get('offset_y', 0)
-            
-            # Get FOV corners for scaling reference
+            # Get FOV corners from calibration data
             fov_corners = self.calibration_data.get('fov_corners', None)
+            if not fov_corners or len(fov_corners) < 4:
+                print("FOV corners not available for mapping")
+                return None
             
-            # Calculate FOV bounds if available
-            fov_min_x, fov_min_y, fov_max_x, fov_max_y = 0, 0, 0, 0
-            fov_width, fov_height = 0, 0
+            # Get camera resolution
+            cam_width = self.calibration_data.get('camera_resolution', {}).get('width', self.frame_width)
+            cam_height = self.calibration_data.get('camera_resolution', {}).get('height', self.frame_height)
             
-            if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
-                # Extract x and y coordinates
-                x_coords = [corner[0] for corner in fov_corners]
-                y_coords = [corner[1] for corner in fov_corners]
-                
-                # Calculate bounds
-                fov_min_x = min(x_coords)
-                fov_max_x = max(x_coords)
-                fov_min_y = min(y_coords)
-                fov_max_y = max(y_coords)
-                
-                fov_width = fov_max_x - fov_min_x
-                fov_height = fov_max_y - fov_min_y
+            if cam_width <= 0 or cam_height <= 0:
+                print("Invalid camera resolution for mapping")
+                return None
             
-            # Transform camera coordinates to projector space with rotation
-            if fov_width > 0 and fov_height > 0:
-                # Apply calibration transformation
-                x_scaled = camera_x * scale
-                y_scaled = camera_y * scale
-                
-                # Determine rotation center
-                if 'rotation_center' in self.calibration_data:
-                    rot_center_x, rot_center_y = self.calibration_data['rotation_center']
-                else:
-                    # Default to FOV center if not specified
-                    rot_center_x = fov_min_x + fov_width/2
-                    rot_center_y = fov_min_y + fov_height/2
-                
-                # Apply rotation around the determined center
-                if rotation != 0:
-                    import math
-                    # Use negative rotation for clockwise direction
-                    cos_r = math.cos(-rotation)
-                    sin_r = math.sin(-rotation)
-                    
-                    # Translate to rotation center
-                    x_trans = x_scaled - rot_center_x
-                    y_trans = y_scaled - rot_center_y
-                    
-                    # Apply rotation
-                    x_rotated = x_trans * cos_r - y_trans * sin_r
-                    y_rotated = x_trans * sin_r + y_trans * cos_r
-                    
-                    # Translate back and apply offset
-                    x_final = int(x_rotated + rot_center_x + offset_x)
-                    y_final = int(y_rotated + rot_center_y + offset_y)
-                else:
-                    # No rotation, just apply offset
-                    x_final = int(x_scaled + offset_x)
-                    y_final = int(y_scaled + offset_y)
-                
-                return (x_final, y_final)
+            # Normalize camera coordinates to [0,1]
+            x_norm = camera_x / cam_width
+            y_norm = camera_y / cam_height
             
-            return None
+            # Clamp normalized coordinates to [0,1]
+            x_norm = max(0, min(1, x_norm))
+            y_norm = max(0, min(1, y_norm))
+            
+            # Extract FOV corners: [TL, TR, BR, BL]
+            TL = fov_corners[0]  # top-left
+            TR = fov_corners[1]  # top-right
+            BL = fov_corners[3]  # bottom-left
+            
+            # Calculate two basis vectors in FOV space
+            vec_x = [TR[0] - TL[0], TR[1] - TL[1]]  # TL -> TR vector
+            vec_y = [BL[0] - TL[0], BL[1] - TL[1]]  # TL -> BL vector
+            
+            # Apply vector-based linear transformation
+            x_final = int(TL[0] + x_norm * vec_x[0] + y_norm * vec_y[0])
+            y_final = int(TL[1] + x_norm * vec_x[1] + y_norm * vec_y[1])
+            
+            return x_final, y_final
             
         except Exception as e:
             print(f"Error mapping camera to screen: {str(e)}")
@@ -1924,76 +1818,19 @@ class SingleDropletApp:
         )
     
     def map_and_draw_debug_dot_pygame(self, camera_x, camera_y):
-        """Map camera coordinates to pygame and draw debug dot"""
+        """Map camera coordinates to pygame and draw debug dot using vector transformation"""
         try:
-            # Get calibration data for coordinate transformation
-            scale = self.calibration_data.get('scale', 1.0)
-            rotation = self.calibration_data.get('rotation', 0.0)
-            offset_x = self.calibration_data.get('offset_x', 0)
-            offset_y = self.calibration_data.get('offset_y', 0)
-            
-            # Get FOV corners for scaling reference
-            fov_corners = self.calibration_data.get('fov_corners', None)
-            
-            # Calculate FOV bounds if available
-            fov_min_x, fov_min_y, fov_max_x, fov_max_y = 0, 0, 0, 0
-            fov_width, fov_height = 0, 0
-            
-            if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
-                # Extract x and y coordinates
-                x_coords = [corner[0] for corner in fov_corners]
-                y_coords = [corner[1] for corner in fov_corners]
-                
-                # Calculate bounds
-                fov_min_x = min(x_coords)
-                fov_max_x = max(x_coords)
-                fov_min_y = min(y_coords)
-                fov_max_y = max(y_coords)
-                
-                fov_width = fov_max_x - fov_min_x
-                fov_height = fov_max_y - fov_min_y
-            
-            # Transform camera coordinates to projector space with rotation
-            if fov_width > 0 and fov_height > 0:
-                # Apply calibration transformation
-                x_scaled = camera_x * scale
-                y_scaled = camera_y * scale
-                
-                # Determine rotation center
-                if 'rotation_center' in self.calibration_data:
-                    rot_center_x, rot_center_y = self.calibration_data['rotation_center']
-                else:
-                    # Default to FOV center if not specified
-                    rot_center_x = fov_min_x + fov_width/2
-                    rot_center_y = fov_min_y + fov_height/2
-                
-                # Apply rotation around the determined center
-                if rotation != 0:
-                    import math
-                    # Use negative rotation for clockwise direction
-                    cos_r = math.cos(-rotation)
-                    sin_r = math.sin(-rotation)
-                    
-                    # Translate to rotation center
-                    x_trans = x_scaled - rot_center_x
-                    y_trans = y_scaled - rot_center_y
-                    
-                    # Apply rotation
-                    x_rotated = x_trans * cos_r - y_trans * sin_r
-                    y_rotated = x_trans * sin_r + y_trans * cos_r
-                    
-                    # Translate back and apply offset
-                    x_final = int(x_rotated + rot_center_x + offset_x)
-                    y_final = int(y_rotated + rot_center_y + offset_y)
-                else:
-                    # No rotation, just apply offset
-                    x_final = int(x_scaled + offset_x)
-                    y_final = int(y_scaled + offset_y)
+            # Use the same vector-based mapping as the main coordinate transformation
+            result = self.map_camera_to_screen(camera_x, camera_y)
+            if result:
+                x_final, y_final = result
                 
                 # Store screen coordinates for pygame drawing
                 self.debug_dot_screen = (x_final, y_final)
                 
                 print(f"Debug mapping: Camera({camera_x:.1f}, {camera_y:.1f}) -> Screen({x_final}, {y_final})")
+            else:
+                print(f"Failed to map camera coordinates: ({camera_x:.1f}, {camera_y:.1f})")
                 
         except Exception as e:
             print(f"Error mapping debug dot: {str(e)}")
@@ -2025,14 +1862,25 @@ class SingleDropletApp:
                 cam_x, cam_y = self.debug_dot_camera
                 coord_text = f"Cam({cam_x:.0f},{cam_y:.0f})->Scr({x},{y})"
                 
-                # Create text surface (pygame doesn't have built-in font rendering)
-                # We'll draw a simple text representation using rectangles
-                text_y = y - 35
+                # Initialize font if not already done
+                if not hasattr(self, 'debug_font'):
+                    pygame.font.init()
+                    self.debug_font = pygame.font.Font(None, 24)
+                
+                # Render text
+                text_surface = self.debug_font.render(coord_text, True, (255, 255, 255))
+                text_rect = text_surface.get_rect()
+                text_rect.centerx = x
+                text_rect.bottom = y - 20
                 
                 # Draw background rectangle for text visibility
-                text_bg_rect = pygame.Rect(x - 80, text_y - 5, 160, 20)
-                pygame.draw.rect(self.pygame_screen, (0, 0, 0), text_bg_rect)
-                pygame.draw.rect(self.pygame_screen, (255, 255, 255), text_bg_rect, 1)
+                bg_rect = text_rect.copy()
+                bg_rect.inflate(10, 4)
+                pygame.draw.rect(self.pygame_screen, (0, 0, 0), bg_rect)
+                pygame.draw.rect(self.pygame_screen, (255, 255, 255), bg_rect, 1)
+                
+                # Draw the text
+                self.pygame_screen.blit(text_surface, text_rect)
                 
                 print(f"Debug dot drawn at pygame coordinates: ({x}, {y})")
                 
