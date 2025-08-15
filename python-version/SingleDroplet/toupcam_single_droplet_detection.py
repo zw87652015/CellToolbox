@@ -1247,67 +1247,36 @@ class SingleDropletApp:
                     
                     print(f"Using cell coordinates directly: {center}")
                     
-                    # Transform camera coordinates to projector space with rotation
-                    if fov_width > 0 and fov_height > 0:
-                        # Apply calibration transformation using detection coordinates directly
-                        x_scaled = center[0] * scale
-                        y_scaled = center[1] * scale
+                    # Map camera coordinates using vector-based transformation
+                    result = self.map_camera_to_screen(center[0], center[1])
+                    if result:
+                        x_final, y_final = result
                         
-                        # Debug print calibration parameters
-                        print(f"Using calibration: scale={scale}, rotation={rotation}°, offset_x={offset_x}, offset_y={offset_y}")
-                        
-                        # Determine rotation center
-                        if 'rotation_center' in self.calibration_data:
-                            rot_center_x, rot_center_y = self.calibration_data['rotation_center']
-                            print(f"Using calibration rotation center: ({rot_center_x}, {rot_center_y})")
+                        # Calculate radius scaling based on FOV dimensions
+                        fov_corners = self.calibration_data.get('fov_corners', None)
+                        if fov_corners and len(fov_corners) >= 4:
+                            # Get camera resolution
+                            cam_width = self.calibration_data.get('camera_resolution', {}).get('width', self.frame_width)
+                            cam_height = self.calibration_data.get('camera_resolution', {}).get('height', self.frame_height)
+                            
+                            # Estimate FOV scale from corner distances
+                            TL = fov_corners[0]
+                            TR = fov_corners[1]
+                            BL = fov_corners[3]
+                            
+                            # Calculate average scale factor from both vectors
+                            vec_x_len = ((TR[0] - TL[0])**2 + (TR[1] - TL[1])**2)**0.5
+                            vec_y_len = ((BL[0] - TL[0])**2 + (BL[1] - TL[1])**2)**0.5
+                            avg_scale = (vec_x_len + vec_y_len) / (cam_width + cam_height)
+                            
+                            scaled_radius = int(radius * avg_scale)
                         else:
-                            # Default to FOV center if not specified
-                            rot_center_x = fov_min_x + fov_width/2
-                            rot_center_y = fov_min_y + fov_height/2
-                            print(f"Using FOV center as rotation center: ({rot_center_x}, {rot_center_y})")
+                            scaled_radius = int(radius * 0.5)  # Default scaling
                         
-                        # Apply rotation around the determined center
-                        if rotation != 0:
-                            import math
-                            # Use negative rotation for clockwise direction
-                            cos_r = math.cos(-rotation)
-                            sin_r = math.sin(-rotation)
-                            
-                            # Translate to rotation center
-                            x_trans = x_scaled - rot_center_x
-                            y_trans = y_scaled - rot_center_y
-                            
-                            # Apply rotation
-                            x_rotated = x_trans * cos_r - y_trans * sin_r
-                            y_rotated = x_trans * sin_r + y_trans * cos_r
-                            
-                            # Translate back and apply offset
-                            x_final = int(x_rotated + rot_center_x + offset_x)
-                            y_final = int(y_rotated + rot_center_y + offset_y)
-                        else:
-                            # No rotation, just apply offset
-                            x_final = int(x_scaled + offset_x)
-                            y_final = int(y_scaled + offset_y)
-                        
-                        # Enhanced coordinate debugging
-                        print(f"Original: ({center[0]}, {center[1]}), Scaled: ({x_scaled:.1f}, {y_scaled:.1f}), Final: ({x_final}, {y_final})")
-                        
-                        # Scale radius to projector space
-                        scaled_radius = int(radius * scale)
+                        print(f"Vector mapping: Camera({center[0]}, {center[1]}) -> Screen({x_final}, {y_final})")
                     else:
-                        # Fallback to original transformation
-                        # Apply calibration transformations
-                        x_rot = center[0] * math.cos(rotation) - center[1] * math.sin(rotation)
-                        y_rot = center[0] * math.sin(rotation) + center[1] * math.cos(rotation)
-                        
-                        # Scale
-                        x_scaled = x_rot * scale
-                        y_scaled = y_rot * scale
-                        
-                        # Apply offset
-                        x_final = int(x_scaled + offset_x)
-                        y_final = int(y_scaled + offset_y)
-                        scaled_radius = radius * scale
+                        print(f"Failed to map cell coordinates: ({center[0]}, {center[1]})")
+                        continue
                     
                     # Calculate box dimensions (make it slightly larger than the cell radius)
                     box_size = max(10, scaled_radius * 2)  # Minimum 10 pixels, or 2x radius
