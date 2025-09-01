@@ -306,9 +306,8 @@ class SingleDropletApp:
             self.root = root
             self.owns_root = False
         
-        # Initialize donut parameters
-        self.donut_inner_scale = 1.2  # Inner circle is 1.2x the cell radius
-        self.donut_outer_scale = 2.0  # Outer circle is 2x the cell radius
+        # Pattern/Cell Size Ratio parameter
+        self.pattern_cell_size_ratio = 1.0  # Default 1:1 ratio between disk and cell size
         
         # Initialize camera variables
         self.hcam = None
@@ -781,27 +780,23 @@ class SingleDropletApp:
         self.view_toggle_button = ttk.Button(control_frame, text="Switch to Donut View", command=self.toggle_view_mode)
         self.view_toggle_button.pack(fill=tk.X, pady=5)
         
-        # Create donut parameter controls
-        donut_frame = ttk.LabelFrame(control_frame, text="Donut Parameters")
-        donut_frame.pack(fill=tk.X, pady=10)
+        # Create pattern parameter controls
+        pattern_frame = ttk.LabelFrame(control_frame, text="Pattern Parameters")
+        pattern_frame.pack(fill=tk.X, pady=10)
         
-        # Inner radius scale
-        inner_frame = ttk.Frame(donut_frame)
-        inner_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(inner_frame, text="Inner Scale:").pack(side=tk.LEFT)
-        inner_scale = ttk.Scale(inner_frame, from_=1.0, to=2.0, orient=tk.HORIZONTAL,
-                              command=lambda v: self.update_donut_params('inner', float(v)))
-        inner_scale.set(self.donut_inner_scale)
-        inner_scale.pack(side=tk.RIGHT, fill=tk.X, expand=True)
+        # Pattern/Cell Size Ratio
+        ratio_frame = ttk.Frame(pattern_frame)
+        ratio_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(ratio_frame, text="Pattern/Cell Size Ratio:").pack(side=tk.LEFT)
         
-        # Outer radius scale
-        outer_frame = ttk.Frame(donut_frame)
-        outer_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(outer_frame, text="Outer Scale:").pack(side=tk.LEFT)
-        outer_scale = ttk.Scale(outer_frame, from_=1.5, to=4.0, orient=tk.HORIZONTAL,
-                              command=lambda v: self.update_donut_params('outer', float(v)))
-        outer_scale.set(self.donut_outer_scale)
-        outer_scale.pack(side=tk.RIGHT, fill=tk.X, expand=True)
+        # Create StringVar for the ratio input
+        self.ratio_var = tk.StringVar(value=str(self.pattern_cell_size_ratio))
+        ratio_entry = ttk.Entry(ratio_frame, textvariable=self.ratio_var, width=8)
+        ratio_entry.pack(side=tk.RIGHT, padx=(5, 0))
+        
+        # Bind validation to the entry
+        ratio_entry.bind('<Return>', self.on_ratio_enter)
+        ratio_entry.bind('<FocusOut>', self.on_ratio_focus_out)
         
         # Cell information display
         info_frame = ttk.LabelFrame(control_frame, text="Cell Information")
@@ -905,86 +900,6 @@ class SingleDropletApp:
                     # Draw camera corners and FOV corners
                     self.draw_debug_corners_pygame()
                 
-                # Draw donuts if enabled
-                if self.show_donuts and self.selected_cells:
-                    try:
-                        # Get camera resolution for homography mapping
-                        cam_width = self.calibration_data.get('camera_resolution', {}).get('width', self.frame_width)
-                        cam_height = self.calibration_data.get('camera_resolution', {}).get('height', self.frame_height)
-                        
-                        print(f"Selected cells: {len(self.selected_cells)}")
-                        print(f"Camera resolution: {cam_width}x{cam_height}")
-                        
-                        # Draw each cell as a donut
-                        for cell in self.selected_cells:
-                            try:
-                                # Get cell center and radius
-                                if hasattr(cell, 'center') and hasattr(cell, 'radius'):
-                                    center = cell.center
-                                    radius = cell.radius
-                                elif isinstance(cell, tuple) and len(cell) == 2:
-                                    center, radius = cell
-                                else:
-                                    print(f"Unknown cell structure: {cell}")
-                                    continue
-                                
-                                # Extract x, y from center
-                                if isinstance(center, tuple) and len(center) == 2:
-                                    x, y = center
-                                else:
-                                    print(f"Invalid center format: {center}")
-                                    continue
-                                
-                                # Map camera coordinates using vector-based transformation
-                                result = self.map_camera_to_screen(x, y)
-                                if result:
-                                    x_final, y_final = result
-                                    
-                                    # Calculate radius scaling based on FOV dimensions
-                                    fov_corners = self.calibration_data.get('fov_corners', None)
-                                    if fov_corners and len(fov_corners) >= 4:
-                                        # Estimate FOV scale from corner distances
-                                        TL = fov_corners[0]
-                                        TR = fov_corners[1]
-                                        BL = fov_corners[3]
-                                        
-                                        # Calculate average scale factor from both vectors
-                                        vec_x_len = ((TR[0] - TL[0])**2 + (TR[1] - TL[1])**2)**0.5
-                                        vec_y_len = ((BL[0] - TL[0])**2 + (BL[1] - TL[1])**2)**0.5
-                                        avg_scale = (vec_x_len + vec_y_len) / (cam_width + cam_height)
-                                        
-                                        scaled_radius = radius * avg_scale
-                                    else:
-                                        scaled_radius = radius * 0.5  # Default scaling
-                                    
-                                    # Calculate inner and outer radii
-                                    inner_radius = int(scaled_radius * self.donut_inner_scale)
-                                    outer_radius = int(scaled_radius * self.donut_outer_scale)
-                                    
-                                    # Ensure radius is reasonable (use screen dimensions)
-                                    max_radius = min(self.pygame_screen.get_width(), self.pygame_screen.get_height()) // 20
-                                    outer_radius = min(outer_radius, max_radius)
-                                    inner_radius = min(inner_radius, outer_radius - 1)
-                                    
-                                    # Draw outer circle (filled white)
-                                    pygame.draw.circle(self.pygame_screen, (255, 255, 255), (x_final, y_final), outer_radius)
-                                    
-                                    # Draw inner circle (filled black) to create donut effect
-                                    pygame.draw.circle(self.pygame_screen, (0, 0, 0), (x_final, y_final), inner_radius)
-                                    
-                                    print(f"Drawing donut at ({x_final}, {y_final}) with inner radius {inner_radius} and outer radius {outer_radius}")
-                                else:
-                                    print("Vector mapping not available for cell mapping")
-                                    
-                            except Exception as e:
-                                print(f"Error drawing individual cell: {str(e)}")
-                                import traceback
-                                traceback.print_exc()
-                    
-                    except Exception as e:
-                        print(f"Error drawing donuts: {str(e)}")
-                        import traceback
-                        traceback.print_exc()
                 
                 # Update display
                 pygame.display.flip()
@@ -1190,7 +1105,7 @@ class SingleDropletApp:
             traceback.print_exc()
     
     def draw_cell_boxes(self):
-        """Draw rectangular boxes for detected cells at their corresponding positions"""
+        """Draw filled circular disks for detected cells at their corresponding positions"""
         try:
             # Get calibration data for coordinate transformation
             scale = self.calibration_data.get('scale', 1.0)
@@ -1226,9 +1141,9 @@ class SingleDropletApp:
             with self.detection_lock:
                 detected_cells = self.detected_cells.copy() if self.detected_cells else []
             
-            print(f"Drawing {len(detected_cells)} cell boxes")
+            print(f"Drawing {len(detected_cells)} cell circles")
             
-            # Draw each detected cell as a rectangular box
+            # Draw each detected cell as a filled circular disk
             for cell in detected_cells:
                 try:
                     # Get cell center and radius
@@ -1278,28 +1193,24 @@ class SingleDropletApp:
                         print(f"Failed to map cell coordinates: ({center[0]}, {center[1]})")
                         continue
                     
-                    # Calculate box dimensions (make it slightly larger than the cell radius)
-                    box_size = max(10, scaled_radius * 2)  # Minimum 10 pixels, or 2x radius
-                    box_half = box_size // 2
+                    # Apply Pattern/Cell Size Ratio and calculate circle radius (ensure minimum visibility)
+                    adjusted_radius = int(scaled_radius * self.pattern_cell_size_ratio)
+                    circle_radius = max(5, adjusted_radius)  # Minimum 5 pixels radius
                     
-                    # Calculate box coordinates
-                    box_x = x_final - box_half
-                    box_y = y_final - box_half
+                    # Ensure circle stays within screen bounds
+                    circle_x = max(circle_radius, min(screen_width - circle_radius, x_final))
+                    circle_y = max(circle_radius, min(screen_height - circle_radius, y_final))
                     
-                    # Ensure box stays within screen bounds
-                    box_x = max(0, min(screen_width - box_size, box_x))
-                    box_y = max(0, min(screen_height - box_size, box_y))
-                    
-                    # Draw filled white box
-                    pygame.draw.rect(self.pygame_screen, (255, 255, 255), (box_x, box_y, box_size, box_size))
+                    # Draw filled white circle
+                    pygame.draw.circle(self.pygame_screen, (255, 255, 255), (circle_x, circle_y), circle_radius)
                     
                     # Draw a small black center dot for precise positioning (visible on white background)
-                    pygame.draw.circle(self.pygame_screen, (0, 0, 0), (x_final, y_final), 3)
+                    pygame.draw.circle(self.pygame_screen, (0, 0, 0), (circle_x, circle_y), 2)
                     
-                    print(f"Drew cell box at screen ({x_final}, {y_final}) with size {box_size}x{box_size}")
+                    print(f"Drew cell circle at screen ({circle_x}, {circle_y}) with radius {circle_radius} (ratio: {self.pattern_cell_size_ratio:.2f})")
                     
                 except Exception as e:
-                    print(f"Error drawing individual cell box: {str(e)}")
+                    print(f"Error drawing individual cell circle: {str(e)}")
                     import traceback
                     traceback.print_exc()
                     
@@ -1463,12 +1374,39 @@ class SingleDropletApp:
         # Update status
         self.status_var.set("Selection cleared")
     
-    def update_donut_params(self, param_type, value):
-        """Update donut parameters"""
-        if param_type == 'inner':
-            self.donut_inner_scale = value
-        elif param_type == 'outer':
-            self.donut_outer_scale = value
+    
+    def update_pattern_size_ratio(self, value):
+        """Update the Pattern/Cell Size Ratio parameter"""
+        self.pattern_cell_size_ratio = value
+        print(f"Pattern/Cell Size Ratio updated to: {value:.2f}")
+    
+    def on_ratio_enter(self, event):
+        """Handle Enter key press in ratio input box"""
+        self.validate_and_update_ratio()
+    
+    def on_ratio_focus_out(self, event):
+        """Handle focus out event in ratio input box"""
+        self.validate_and_update_ratio()
+    
+    def validate_and_update_ratio(self):
+        """Validate and update the pattern size ratio from input box"""
+        try:
+            value = float(self.ratio_var.get())
+            # Clamp value to reasonable range
+            if value < 0.1:
+                value = 0.1
+            elif value > 5.0:
+                value = 5.0
+            
+            # Update the parameter and UI
+            self.pattern_cell_size_ratio = value
+            self.ratio_var.set(f"{value:.2f}")
+            print(f"Pattern/Cell Size Ratio updated to: {value:.2f}")
+            
+        except ValueError:
+            # Reset to current value if invalid input
+            self.ratio_var.set(f"{self.pattern_cell_size_ratio:.2f}")
+            print(f"Invalid ratio input, reset to: {self.pattern_cell_size_ratio:.2f}")
     
     def toggle_view_mode(self):
         """Toggle between camera and donut view modes"""
