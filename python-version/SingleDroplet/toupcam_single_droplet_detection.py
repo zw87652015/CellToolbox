@@ -99,7 +99,7 @@ class DetectedCell:
 def load_calibration_data():
     """Load the latest calibration data"""
     try:
-        with open('E:/Documents/Codes/Matlab/CellToolbox/python-version/calibration/latest_calibration.json', 'r') as f:
+        with open('D:\Documents\Codes\CellToolbox\python-version\calibration\latest_calibration.json', 'r') as f:
             data = json.load(f)
             required_fields = ['scale', 'rotation', 'offset_x', 'offset_y', 
                              'camera_resolution', 'projector_resolution', 'fov_corners']
