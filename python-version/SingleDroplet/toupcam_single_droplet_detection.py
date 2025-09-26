@@ -22,6 +22,7 @@ import pygame
 import math
 import random
 import toupcam
+from datetime import datetime, timezone, timedelta
 
 # Import exposure control panel
 from exposure_control_panel import ExposureControlPanel
@@ -99,7 +100,10 @@ class DetectedCell:
 def load_calibration_data():
     """Load the latest calibration data"""
     try:
-        with open('D:\Documents\Codes\CellToolbox\python-version\calibration\latest_calibration.json', 'r') as f:
+        # Use relative path from the current script location
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        calibration_path = os.path.join(os.path.dirname(script_dir), 'calibration', 'latest_calibration.json')
+        with open(calibration_path, 'r') as f:
             data = json.load(f)
             required_fields = ['scale', 'rotation', 'offset_x', 'offset_y', 
                              'camera_resolution', 'projector_resolution', 'fov_corners']
@@ -328,6 +332,7 @@ class SingleDropletApp:
         self.detection_queue = queue.Queue(maxsize=2)  # Small queue to avoid memory buildup
         self.detection_results = []
         self.detection_lock = threading.Lock()
+        self.raw_mode = False  # Track RAW mode state
         
         # Initialize variables
         self.running = True
@@ -483,15 +488,49 @@ class SingleDropletApp:
             return
     
         try:
-            # Pull the image from the camera with minimal processing
+            # Always pull as RGB24 for live view (regardless of RAW mode setting)
             self.hcam.PullImageV4(self.cam_buffer, 0, 24, 0, None)
             
-            # Convert the raw buffer to a numpy array using pre-allocated shape
+            # Calculate buffer size and stride
+            buffer_size = len(self.cam_buffer)
+            expected_rgb_size = toupcam.TDIBWIDTHBYTES(self.frame_width * 24) * self.frame_height
             stride = toupcam.TDIBWIDTHBYTES(self.frame_width * 24) // 3
-            frame = np.frombuffer(self.cam_buffer, dtype=np.uint8).reshape(
-                (self.frame_height, stride, 3))[:, :self.frame_width, :]
             
-            # Rotate the frame by 180 degrees before any processing
+            # Debug info
+            if buffer_size != expected_rgb_size:
+                print(f"Buffer size mismatch: got {buffer_size}, expected {expected_rgb_size}")
+                print(f"Frame dimensions: {self.frame_width}x{self.frame_height}")
+                print(f"Stride: {stride}")
+                
+                # Try to use the actual buffer size to determine correct dimensions
+                actual_stride = buffer_size // self.frame_height // 3
+                if actual_stride > 0:
+                    stride = actual_stride
+                    print(f"Using calculated stride: {stride}")
+            
+            # Reshape with error handling
+            try:
+                frame = np.frombuffer(self.cam_buffer, dtype=np.uint8).reshape(
+                    (self.frame_height, stride, 3))[:, :self.frame_width, :]
+            except ValueError as e:
+                print(f"Reshape error: {e}")
+                print(f"Buffer size: {buffer_size}, trying to reshape to ({self.frame_height}, {stride}, 3)")
+                # Fall back to a safe reshape
+                total_pixels = buffer_size // 3
+                if total_pixels == self.frame_width * self.frame_height:
+                    frame = np.frombuffer(self.cam_buffer, dtype=np.uint8).reshape(
+                        (self.frame_height, self.frame_width, 3))
+                else:
+                    print("Cannot safely reshape buffer, skipping frame")
+                    return
+            
+            if self.raw_mode:
+                # Convert to grayscale for RAW-like visualization
+                gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                # Convert back to BGR for consistent display
+                frame = cv2.cvtColor(gray_frame, cv2.COLOR_GRAY2BGR)
+            
+            # Apply the same 180-degree rotation
             frame = cv2.rotate(frame, cv2.ROTATE_180)
             
             # Thread-safe frame buffer update
@@ -771,6 +810,33 @@ class SingleDropletApp:
         ttk.Button(control_frame, text="Clear Selection", command=self.clear_selection).pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Clear ROI", command=self.clear_roi).pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Exposure Control", command=self.open_exposure_control).pack(fill=tk.X, pady=5)
+        ttk.Button(control_frame, text="Capture Photo", command=self.capture_photo).pack(fill=tk.X, pady=5)
+        
+        # Camera format controls
+        format_frame = ttk.LabelFrame(control_frame, text="Camera Format Settings")
+        format_frame.pack(fill=tk.X, pady=10)
+        
+        # RAW format buttons
+        raw_button_frame = ttk.Frame(format_frame)
+        raw_button_frame.pack(fill=tk.X, pady=2)
+        ttk.Button(raw_button_frame, text="Enable RAW", command=lambda: self.set_raw_format(True)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(raw_button_frame, text="Enable RGB", command=lambda: self.set_raw_format(False)).pack(side=tk.LEFT, padx=2)
+        
+        # Bit depth buttons
+        depth_button_frame = ttk.Frame(format_frame)
+        depth_button_frame.pack(fill=tk.X, pady=2)
+        ttk.Button(depth_button_frame, text="Max Bit Depth", command=lambda: self.set_bit_depth(True)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(depth_button_frame, text="8-bit Depth", command=lambda: self.set_bit_depth(False)).pack(side=tk.LEFT, padx=2)
+        
+        # RGB format dropdown
+        rgb_format_frame = ttk.Frame(format_frame)
+        rgb_format_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(rgb_format_frame, text="RGB Format:").pack(side=tk.LEFT)
+        self.rgb_format_var = tk.StringVar(value="RGB24")
+        rgb_formats = ["RGB24", "RGB48", "RGB32", "8-bit Grey", "16-bit Grey", "RGB64"]
+        rgb_combo = ttk.Combobox(rgb_format_frame, textvariable=self.rgb_format_var, values=rgb_formats, state="readonly", width=12)
+        rgb_combo.pack(side=tk.RIGHT, padx=2)
+        rgb_combo.bind('<<ComboboxSelected>>', self.on_rgb_format_changed)
         
         # Debug mode button
         self.debug_button = ttk.Button(control_frame, text="Enable Debug Mode", command=self.toggle_debug_mode)
@@ -880,10 +946,11 @@ class SingleDropletApp:
                 
                 # Draw FOV corners from calibration data
                 try:
-                    fov_corners = self.calibration_data.get('fov_corners', None)
-                    if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
-                        # Draw FOV outline with thin lines only
-                        pygame.draw.lines(self.pygame_screen, (50, 50, 50), True, fov_corners, 1)
+                    if self.calibration_data is not None:
+                        fov_corners = self.calibration_data.get('fov_corners', None)
+                        if fov_corners and isinstance(fov_corners, list) and len(fov_corners) >= 4:
+                            # Draw FOV outline with thin lines only
+                            pygame.draw.lines(self.pygame_screen, (50, 50, 50), True, fov_corners, 1)
                 except Exception as e:
                     print(f"Error drawing FOV corners: {str(e)}")
                 
@@ -1107,6 +1174,10 @@ class SingleDropletApp:
     def draw_cell_boxes(self):
         """Draw filled circular disks for detected cells at their corresponding positions"""
         try:
+            # Check if calibration data is available
+            if self.calibration_data is None:
+                return
+                
             # Get calibration data for coordinate transformation
             scale = self.calibration_data.get('scale', 1.0)
             rotation = self.calibration_data.get('rotation', 0.0)
@@ -1374,7 +1445,348 @@ class SingleDropletApp:
         # Update status
         self.status_var.set("Selection cleared")
     
+    def capture_photo(self):
+        """Capture a photo with current exposure parameters and save to Captures folder"""
+        try:
+            # Create Beijing/Shanghai timezone (UTC+8)
+            beijing_tz = timezone(timedelta(hours=8))
+            
+            # Get current time in Beijing/Shanghai timezone
+            now = datetime.now(beijing_tz)
+            
+            # Create date folder name (YYYY-MM-DD)
+            date_folder = now.strftime("%Y-%m-%d")
+            
+            # Create full directory path
+            captures_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Captures", date_folder)
+            os.makedirs(captures_dir, exist_ok=True)
+            
+            if self.raw_mode:
+                # For RAW capture, we capture the Bayer pattern components separately
+                bayer_channels = self.capture_raw_frame()
+                if bayer_channels is None:
+                    self.status_var.set("Failed to capture RAW Bayer data")
+                    messagebox.showerror("Capture Error", "Failed to capture RAW Bayer data")
+                    return
+                
+                # Create base filename with time (HH-MM-SS)
+                base_filename = now.strftime("%H-%M-%S")
+                
+                # Save each Bayer channel separately
+                channel_names = ["R", "G", "B"]
+                saved_files = []
+                
+                for i, (channel_data, channel_name) in enumerate(zip(bayer_channels, channel_names)):
+                    filename = f"{base_filename}_Bayer_{channel_name}.tif"
+                    file_path = os.path.join(captures_dir, filename)
+                    
+                    success = cv2.imwrite(file_path, channel_data)
+                    if success:
+                        saved_files.append(filename)
+                        print(f"RAW Bayer {channel_name} channel saved to: {file_path}")
+                    else:
+                        print(f"Failed to save Bayer {channel_name} channel")
+                
+                if saved_files:
+                    self.status_var.set(f"RAW Bayer channels captured: {len(saved_files)} files")
+                    files_list = "\n".join([os.path.join(captures_dir, f) for f in saved_files])
+                    messagebox.showinfo("RAW Capture Success", f"RAW Bayer channels saved:\n{files_list}")
+                    print(f"RAW Bayer capture complete: {len(saved_files)} channels saved")
+                else:
+                    raise Exception("Failed to save any Bayer channel files")
+                    
+            else:
+                # Get current RGB frame
+                with self.frame_lock:
+                    if self.frame_buffer is None:
+                        self.status_var.set("No frame available for capture")
+                        messagebox.showerror("Capture Error", "No frame available for capture")
+                        return
+                    
+                    # Make a copy of the current frame
+                    frame = self.frame_buffer.copy()
+                
+                # Create filename with time (HH-MM-SS) - using TIFF format for better quality
+                filename = now.strftime("%H-%M-%S.tif")
+                
+                # Full file path
+                file_path = os.path.join(captures_dir, filename)
+                
+                # Save the image directly as TIFF (no color conversion needed for TIFF)
+                # TIFF format preserves the original color depth and quality
+                success = cv2.imwrite(file_path, frame)
+                
+                if success:
+                    # Update status and show success message
+                    self.status_var.set(f"RGB photo captured: {filename}")
+                    messagebox.showinfo("Capture Success", f"RGB photo saved to:\n{file_path}")
+                    print(f"RGB photo captured and saved to: {file_path}")
+                else:
+                    raise Exception("Failed to save image file")
+            
+        except Exception as e:
+            error_msg = f"Error capturing photo: {str(e)}"
+            self.status_var.set(error_msg)
+            messagebox.showerror("Capture Error", error_msg)
+            print(f"Capture error: {e}")
+            import traceback
+            traceback.print_exc()
     
+    def capture_raw_frame(self):
+        """Simulate RAW Bayer pattern capture by processing the current RGB frame"""
+        try:
+            print("Capturing RAW Bayer pattern data...")
+            
+            # Get the current RGB frame from the live view
+            with self.frame_lock:
+                if self.frame_buffer is None:
+                    print("No frame buffer available for RAW capture")
+                    return None
+                
+                # Make a copy of the current frame
+                rgb_frame = self.frame_buffer.copy()
+            
+            # Convert BGR to RGB for proper channel extraction
+            rgb_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_BGR2RGB)
+            
+            # Extract individual color channels
+            r_channel = rgb_frame[:, :, 0]  # Red channel
+            g_channel = rgb_frame[:, :, 1]  # Green channel
+            b_channel = rgb_frame[:, :, 2]  # Blue channel
+            
+            # Apply rotation to match the expected orientation
+            r_channel = cv2.rotate(r_channel, cv2.ROTATE_180)
+            g_channel = cv2.rotate(g_channel, cv2.ROTATE_180)
+            b_channel = cv2.rotate(b_channel, cv2.ROTATE_180)
+            
+            # Simulate Bayer pattern by creating a checkerboard pattern for each channel
+            # This creates the "raw-like" effect you were seeing
+            height, width = r_channel.shape
+            
+            # Create Bayer pattern masks
+            r_mask = np.zeros((height, width), dtype=np.uint8)
+            g_mask = np.zeros((height, width), dtype=np.uint8)
+            b_mask = np.zeros((height, width), dtype=np.uint8)
+            
+            # RGGB Bayer pattern
+            r_mask[0::2, 0::2] = 255  # Red at even rows, even columns
+            g_mask[0::2, 1::2] = 255  # Green at even rows, odd columns
+            g_mask[1::2, 0::2] = 255  # Green at odd rows, even columns
+            b_mask[1::2, 1::2] = 255  # Blue at odd rows, odd columns
+            
+            # Apply Bayer pattern masks to simulate raw sensor data
+            r_bayer = cv2.bitwise_and(r_channel, r_mask)
+            g_bayer = cv2.bitwise_and(g_channel, g_mask)
+            b_bayer = cv2.bitwise_and(b_channel, b_mask)
+            
+            # Create the three separate channel images
+            # Each channel shows only the pixels that would be captured by that color filter
+            r_image = np.zeros((height, width, 3), dtype=np.uint8)
+            g_image = np.zeros((height, width, 3), dtype=np.uint8)
+            b_image = np.zeros((height, width, 3), dtype=np.uint8)
+            
+            # Fill the appropriate channel in each image
+            r_image[:, :, 2] = r_bayer  # Red channel in BGR format
+            g_image[:, :, 1] = g_bayer  # Green channel in BGR format
+            b_image[:, :, 0] = b_bayer  # Blue channel in BGR format
+            
+            # Detect and extract single subimage from each channel
+            # Based on your description: 3 subimages, each 896 pixels wide
+            subimage_width = 896
+            expected_subimage_width = width // 3  # Should be around 896 (2688/3)
+            
+            print(f"Image dimensions: {width}x{height}")
+            print(f"Expected subimage width: {expected_subimage_width}")
+            
+            # Extract the first (leftmost) subimage from each channel
+            if width >= subimage_width * 3:
+                # Use specific crop dimensions: 896x507
+                crop_width = 896
+                crop_height = 507
+                
+                print(f"Cropping subimages to: {crop_width}x{crop_height}")
+                
+                # Ensure we don't exceed image boundaries
+                crop_width = min(crop_width, width // 3)
+                crop_height = min(crop_height, height)
+                
+                # Extract and crop the first subimage (leftmost) from each channel
+                r_subimage = r_image[:crop_height, :crop_width, :]
+                g_subimage = g_image[:crop_height, :crop_width, :]
+                b_subimage = b_image[:crop_height, :crop_width, :]
+                
+                print(f"Subimage extraction complete: {crop_width}x{crop_height}")
+                return [r_subimage, g_subimage, b_subimage]
+            else:
+                print("Image width too small for subimage extraction, returning full images")
+                return [r_image, g_image, b_image]
+            
+        except Exception as e:
+            print(f"Error in RAW capture: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def stop_camera_for_settings(self):
+        """Stop the camera safely for settings changes"""
+        if not self.hcam:
+            return False
+            
+        try:
+            print("Stopping camera for settings change...")
+            self.running = False  # Stop frame processing
+            self.hcam.Stop()
+            print("Camera stopped successfully")
+            return True
+        except Exception as e:
+            print(f"Error stopping camera: {e}")
+            return False
+    
+    def restart_camera_after_settings(self):
+        """Restart the camera after settings changes"""
+        if not self.hcam:
+            return False
+            
+        try:
+            print("Restarting camera after settings change...")
+            
+            # Always allocate buffer for RGB24 since we always pull RGB for live view
+            # RAW capture will use separate buffers in the capture_raw_frame method
+            bufsize = toupcam.TDIBWIDTHBYTES(self.frame_width * 24) * self.frame_height
+            self.cam_buffer = bytes(bufsize)
+            print(f"Buffer allocated for RGB live view: {bufsize} bytes (RAW mode: {'ON' if self.raw_mode else 'OFF'})")
+            
+            self.running = True
+            self.hcam.StartPullModeWithCallback(self.camera_callback, self)
+            print("Camera restarted successfully")
+            return True
+        except Exception as e:
+            print(f"Error restarting camera: {e}")
+            return False
+    
+    def set_raw_format(self, enable_raw=True):
+        """Set camera to RAW format (requires camera to be stopped)"""
+        if not self.hcam:
+            messagebox.showerror("Camera Error", "No camera connected")
+            return False
+            
+        # Stop camera first
+        if not self.stop_camera_for_settings():
+            messagebox.showerror("Settings Error", "Failed to stop camera for settings change")
+            return False
+        
+        try:
+            # Set RAW format
+            raw_value = 1 if enable_raw else 0
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_RAW, raw_value)
+            self.raw_mode = enable_raw
+            print(f"RAW format {'enabled' if enable_raw else 'disabled'}")
+            
+            # Restart camera
+            if self.restart_camera_after_settings():
+                mode_text = "RAW" if enable_raw else "RGB"
+                self.status_var.set(f"Camera format changed to {mode_text}")
+                messagebox.showinfo("Settings Changed", f"Camera format changed to {mode_text}")
+                return True
+            else:
+                messagebox.showerror("Settings Error", "Failed to restart camera after settings change")
+                return False
+                
+        except toupcam.HRESULTException as ex:
+            error_msg = f"Failed to set RAW format: 0x{ex.hr & 0xffffffff:x}"
+            print(error_msg)
+            messagebox.showerror("Settings Error", error_msg)
+            # Try to restart camera anyway
+            self.restart_camera_after_settings()
+            return False
+    
+    def set_bit_depth(self, use_max_depth=True):
+        """Set camera bit depth (requires camera to be stopped)"""
+        if not self.hcam:
+            messagebox.showerror("Camera Error", "No camera connected")
+            return False
+            
+        # Stop camera first
+        if not self.stop_camera_for_settings():
+            messagebox.showerror("Settings Error", "Failed to stop camera for settings change")
+            return False
+        
+        try:
+            # Set bit depth
+            depth_value = 1 if use_max_depth else 0
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_BITDEPTH, depth_value)
+            print(f"Bit depth set to {'maximum' if use_max_depth else '8-bit'}")
+            
+            # Restart camera
+            if self.restart_camera_after_settings():
+                depth_text = "Maximum" if use_max_depth else "8-bit"
+                self.status_var.set(f"Camera bit depth changed to {depth_text}")
+                messagebox.showinfo("Settings Changed", f"Camera bit depth changed to {depth_text}")
+                return True
+            else:
+                messagebox.showerror("Settings Error", "Failed to restart camera after settings change")
+                return False
+                
+        except toupcam.HRESULTException as ex:
+            error_msg = f"Failed to set bit depth: 0x{ex.hr & 0xffffffff:x}"
+            print(error_msg)
+            messagebox.showerror("Settings Error", error_msg)
+            # Try to restart camera anyway
+            self.restart_camera_after_settings()
+            return False
+    
+    def set_rgb_format(self, rgb_format=0):
+        """Set RGB format (requires camera to be stopped)
+        0 = RGB24, 1 = RGB48, 2 = RGB32, 3 = 8-bit grey, 4 = 16-bit grey, 5 = RGB64
+        """
+        if not self.hcam:
+            messagebox.showerror("Camera Error", "No camera connected")
+            return False
+            
+        # Stop camera first
+        if not self.stop_camera_for_settings():
+            messagebox.showerror("Settings Error", "Failed to stop camera for settings change")
+            return False
+        
+        try:
+            # Set RGB format
+            self.hcam.put_Option(toupcam.TOUPCAM_OPTION_RGB, rgb_format)
+            format_names = {0: "RGB24", 1: "RGB48", 2: "RGB32", 3: "8-bit Grey", 4: "16-bit Grey", 5: "RGB64"}
+            format_name = format_names.get(rgb_format, f"Format {rgb_format}")
+            print(f"RGB format set to {format_name}")
+            
+            # Restart camera
+            if self.restart_camera_after_settings():
+                self.status_var.set(f"Camera RGB format changed to {format_name}")
+                messagebox.showinfo("Settings Changed", f"Camera RGB format changed to {format_name}")
+                return True
+            else:
+                messagebox.showerror("Settings Error", "Failed to restart camera after settings change")
+                return False
+                
+        except toupcam.HRESULTException as ex:
+            error_msg = f"Failed to set RGB format: 0x{ex.hr & 0xffffffff:x}"
+            print(error_msg)
+            messagebox.showerror("Settings Error", error_msg)
+            # Try to restart camera anyway
+            self.restart_camera_after_settings()
+            return False
+
+    def on_rgb_format_changed(self, event):
+        """Handle RGB format combobox selection"""
+        format_map = {
+            "RGB24": 0,
+            "RGB48": 1, 
+            "RGB32": 2,
+            "8-bit Grey": 3,
+            "16-bit Grey": 4,
+            "RGB64": 5
+        }
+        
+        selected_format = self.rgb_format_var.get()
+        format_value = format_map.get(selected_format, 0)
+        self.set_rgb_format(format_value)
+
     def update_pattern_size_ratio(self, value):
         """Update the Pattern/Cell Size Ratio parameter"""
         self.pattern_cell_size_ratio = value
@@ -1470,6 +1882,11 @@ class SingleDropletApp:
     def calculate_debug_corners(self):
         """Calculate camera corners and FOV corners for debug visualization"""
         try:
+            # Check if calibration data is available
+            if self.calibration_data is None:
+                print("No calibration data available for debug corners")
+                return
+                
             # Define camera corners (four corners of the camera view)
             camera_corners = [
                 (0, 0),  # Top-left
@@ -1519,6 +1936,10 @@ class SingleDropletApp:
     def map_camera_to_screen(self, camera_x, camera_y):
         """Map camera coordinates to screen coordinates using vector-based linear transformation"""
         try:
+            # Check if calibration data is available
+            if self.calibration_data is None:
+                return None
+                
             # Get FOV corners from calibration data
             fov_corners = self.calibration_data.get('fov_corners', None)
             if not fov_corners or len(fov_corners) < 4:
