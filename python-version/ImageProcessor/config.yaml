@@ -1,0 +1,36 @@
+# ImageProcessor Configuration File
+# Bayer pattern processing parameters
+
+# Contrast enhancement parameters (for detection only, not measurement)
+contrast_enhancement:
+  enabled: true  # Enable contrast enhancement for better cell detection
+  clahe_clip_limit: 1.2  # CLAHE clip limit (higher = more contrast)
+  clahe_tile_size: 4  # CLAHE tile grid size
+  gamma: 2  # Gamma correction (< 1 brightens mid-tones)
+
+# Gaussian filtering parameters
+gaussian:
+  sigma: 0.8  # Standard deviation for Gaussian blur (pixels)
+
+# Thresholding parameters
+thresholding:
+  algorithm: "otsu"  # Options: "otsu", "triangle"
+  min_area: 200  # Minimum area for connected components (pixels)
+
+# Morphological operations
+morphology:
+  closing_radius: 3  # Disk radius for morphological closing (pixels)
+
+# Dark field processing
+dark_field:
+  corner_size: 50  # Size of corner regions for median calculation (pixels)
+
+# Output settings
+output:
+  overlay_colormap: "red"  # Colormap for quality control image: "red", "jet", "magma"
+  contour_color: [0, 255, 0]  # RGB color for contours (green)
+  text_color: [255, 255, 255]  # RGB color for text (white)
+
+# Logging
+logging:
+  level: "INFO"  # Options: "DEBUG", "INFO", "WARNING", "ERROR"
