@@ -991,3 +991,32 @@ UnboundLocalError: cannot access local variable 'np' where it is not associated 
 2025-09-30 16:03:01,258 - INFO - Successfully saved overlay image using PIL: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20250929\285V\output\DSC02845-RAWcomposite-cells-overlay.tiff
 2025-09-30 16:03:01,276 - INFO - Overlay image created successfully: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20250929\285V\output\DSC02845-RAWcomposite-cells-overlay.tiff (24712934 bytes)
 2025-09-30 16:03:01,293 - INFO - Results saving completed for: DSC02845-RAWcomposite
+2025-10-02 13:45:20,985 - INFO - ImageProcessor initialized
+2025-10-02 17:13:16,789 - INFO - ImageProcessor initialized
+2025-10-02 17:13:51,116 - INFO - Loaded image: 7028x4688, dtype: uint16
+2025-10-02 17:13:51,662 - INFO - Bayer split completed: R shape (2344, 3514)
+2025-10-02 17:13:51,951 - INFO - Loading dark field image from: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20251002\Dark\tif\Dark1.tif
+2025-10-02 17:13:52,017 - INFO - Loaded image: 7028x4688, dtype: uint16
+2025-10-02 17:13:52,050 - INFO - Bayer split completed: R shape (2344, 3514)
+2025-10-02 17:13:52,055 - INFO - Using provided dark field image(2344, 3514)
+2025-10-02 17:13:52,078 - INFO - Dark field subtraction completed: range [0.00, 59311.00]
+2025-10-02 17:13:52,578 - INFO - Contrast enhancement applied: CLAHE(clip=1.2, tile=4), gamma=2
+2025-10-02 17:13:52,589 - INFO - Enhanced range: [0.00, 59311.00]
+2025-10-02 17:13:55,234 - INFO - Gaussian filtering applied: sigma = 0.8
+2025-10-02 17:14:22,763 - INFO - Post-processing: removed objects < 200 pixels, closing radius = 3
+2025-10-02 17:14:31,925 - INFO - Found 1 contours
+2025-10-02 17:14:35,006 - INFO - Measured intensity for 1 cells
+2025-10-02 17:15:27,972 - INFO - Saving results to directory: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20251002\1\Output
+2025-10-02 17:15:27,979 - INFO - Saving CSV to: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20251002\1\Output\DSC02901-RAWcomposite-cells.csv
+2025-10-02 17:15:27,987 - INFO - Saved 1 cells to CSV: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20251002\1\Output\DSC02901-RAWcomposite-cells.csv
+2025-10-02 17:15:27,994 - INFO - CSV file created successfully: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20251002\1\Output\DSC02901-RAWcomposite-cells.csv
+2025-10-02 17:15:28,013 - INFO - Creating overlay image: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20251002\1\Output\DSC02901-RAWcomposite-cells-overlay.tiff
+2025-10-02 17:15:28,020 - INFO - Using 1 contours and 1 cell data entries
+2025-10-02 17:15:28,024 - INFO - Creating overlay image with 1 contours
+2025-10-02 17:15:28,028 - INFO - Image shape: (2344, 3514), dtype: float32
+2025-10-02 17:15:28,032 - INFO - Image range: 0.0 to 59311.0
+2025-10-02 17:15:28,062 - INFO - Saving overlay image to: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20251002\1\Output\DSC02901-RAWcomposite-cells-overlay.tiff
+2025-10-02 17:15:28,074 - WARNING - cv2.imwrite failed, trying alternative method: cv2.imwrite returned False
+2025-10-02 17:15:28,153 - INFO - Successfully saved overlay image using PIL: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20251002\1\Output\DSC02901-RAWcomposite-cells-overlay.tiff
+2025-10-02 17:15:28,173 - INFO - Overlay image created successfully: E:\Documents\OneDrive - Wuchang Experimental High School\课题组\CX\有源数字液滴微流控\光流控\HeLa电穿孔\20251002\1\Output\DSC02901-RAWcomposite-cells-overlay.tiff (24712934 bytes)
+2025-10-02 17:15:28,189 - INFO - Results saving completed for: DSC02901-RAWcomposite

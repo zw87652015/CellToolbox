@@ -1,0 +1,57 @@
+{
+    "_description": {
+        "version": "配置文件版本",
+        "processing_parameters": {
+            "gaussian_sigma": "高斯模糊参数 (0.5-3.0)",
+            "threshold_method": "阈值算法 (otsu/triangle)",
+            "min_area": "最小细胞面积 (像素)",
+            "closing_radius": "形态学关闭半径",
+            "opening_radius": "形态学打开半径",
+            "max_components": "保留的最大连通域数量"
+        },
+        "file_paths": {
+            "brightfield_path": "明场图像文件路径",
+            "fluorescence_folder": "荧光图像文件夹路径",
+            "darkfield_paths": "黑场图像文件路径（多个用;分隔）",
+            "output_folder": "输出文件夹路径"
+        },
+        "advanced_settings": {
+            "memory_map_threshold_mb": "使用内存映射的文件大小阈值(MB)",
+            "use_multiprocessing": "是否使用多进程处理",
+            "max_workers": "最大工作进程数",
+            "chunk_size": "批处理块大小",
+            "save_intermediate_results": "是否保存中间结果",
+            "backup_existing_files": "是否备份已存在的文件"
+        }
+    },
+    "version": "1.0",
+    "created_date": "2024-01-01T00:00:00",
+    "processing_parameters": {
+        "gaussian_sigma": 1.5,
+        "threshold_method": "otsu",
+        "min_area": 500,
+        "closing_radius": 3,
+        "opening_radius": 2,
+        "max_components": 1
+    },
+    "file_paths": {
+        "brightfield_path": "",
+        "fluorescence_folder": "",
+        "darkfield_paths": "",
+        "output_folder": ""
+    },
+    "advanced_settings": {
+        "memory_map_threshold_mb": 500,
+        "use_multiprocessing": false,
+        "max_workers": 4,
+        "chunk_size": 100,
+        "save_intermediate_results": true,
+        "backup_existing_files": true
+    },
+    "ui_settings": {
+        "window_geometry": "800x700",
+        "log_level": "INFO",
+        "auto_save_config": true,
+        "show_preview_window": true
+    }
+}
