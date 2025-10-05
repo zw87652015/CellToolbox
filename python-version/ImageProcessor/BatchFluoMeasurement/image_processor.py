@@ -345,7 +345,110 @@ class ImageProcessor:
             self.log(error_msg, "ERROR")
             raise Exception(error_msg)
             
-    def measure_fluorescence_intensity(self, fluorescence_image, cell_mask, dark_correction=None, offset_correction=None):
+    def optimize_offset_for_max_intensity(self, fluorescence_image, cell_mask, dark_correction=None, base_offset=(0, 0), search_range=5):
+        """
+        优化偏移量以获得最大平均荧光强度
+        
+        Args:
+            fluorescence_image: 荧光图像
+            cell_mask: 细胞掩膜 (基于明场图像)
+            dark_correction: 黑场校正图像
+            base_offset: 基础偏移量 (x_offset, y_offset)
+            search_range: 搜索范围 (±像素数)
+            
+        Returns:
+            字典包含最优偏移量和对应的强度数据
+        """
+        try:
+            # 提取R通道
+            fluo_r = self.extract_bayer_r_channel(fluorescence_image)
+            
+            # 应用黑场校正
+            fluo_r_corrected = self.apply_dark_correction(fluo_r, dark_correction)
+            
+            base_x, base_y = base_offset
+            best_mean = -1
+            best_offset = base_offset
+            best_result = None
+            
+            # 搜索范围内的所有偏移组合 (11x11 = 121 tries)
+            search_count = 0
+            total_searches = (2 * search_range + 1) ** 2
+            
+            self.log(f"开始偏移优化搜索: 基础偏移=({base_x}, {base_y}), 搜索范围=±{search_range}像素")
+            
+            for dx in range(-search_range, search_range + 1):
+                for dy in range(-search_range, search_range + 1):
+                    search_count += 1
+                    
+                    # 计算当前偏移
+                    current_x = base_x + dx
+                    current_y = base_y + dy
+                    
+                    # 应用偏移到掩膜
+                    corrected_mask = self._apply_offset_to_mask(cell_mask, current_x, current_y, fluo_r_corrected.shape)
+                    
+                    # 测量强度
+                    cell_pixels = fluo_r_corrected[corrected_mask]
+                    
+                    if len(cell_pixels) > 0:
+                        mean_intensity = float(np.mean(cell_pixels))
+                        
+                        # 显示每个偏移参数下的Mean值
+                        self.log(f"偏移({current_x:+3d}, {current_y:+3d}) -> Mean: {mean_intensity:.2f} (搜索 {search_count}/{total_searches})")
+                        
+                        # 如果找到更高的平均强度，更新最佳结果
+                        if mean_intensity > best_mean:
+                            best_mean = mean_intensity
+                            best_offset = (current_x, current_y)
+                            
+                            # 计算完整的强度数据
+                            area = len(cell_pixels)
+                            total_intensity = float(np.sum(cell_pixels))
+                            
+                            best_result = {
+                                'mean': mean_intensity,
+                                'total': total_intensity,
+                                'area': area,
+                                'optimized_offset': best_offset,
+                                'offset_improvement': (dx, dy)
+                            }
+                            
+                            self.log(f"*** 发现更佳偏移: ({current_x:+3d}, {current_y:+3d}) -> Mean: {mean_intensity:.2f} ***")
+                    else:
+                        # 如果掩膜为空，也记录这个情况
+                        self.log(f"偏移({current_x:+3d}, {current_y:+3d}) -> Mean: 0.00 (掩膜为空) (搜索 {search_count}/{total_searches})")
+            
+            if best_result is None:
+                self.log("警告: 偏移优化未找到有效掩膜", "WARNING")
+                return {
+                    'mean': 0.0, 
+                    'total': 0.0, 
+                    'area': 0,
+                    'optimized_offset': base_offset,
+                    'offset_improvement': (0, 0)
+                }
+            
+            improvement_x, improvement_y = best_result['offset_improvement']
+            final_x, final_y = best_result['optimized_offset']
+            
+            self.log(f"偏移优化完成总结:")
+            self.log(f"  - 搜索位置数: {total_searches}")
+            self.log(f"  - 基础偏移: ({base_x:+d}, {base_y:+d})")
+            self.log(f"  - 最佳偏移: ({final_x:+d}, {final_y:+d})")
+            self.log(f"  - 偏移改进: ({improvement_x:+d}, {improvement_y:+d})")
+            self.log(f"  - 最佳平均强度: {best_mean:.2f}")
+            self.log(f"  - 细胞面积: {best_result['area']} 像素")
+            self.log(f"  - 总强度: {best_result['total']:.2f}")
+            
+            return best_result
+            
+        except Exception as e:
+            error_msg = f"偏移优化失败: {str(e)}"
+            self.log(error_msg, "ERROR")
+            raise Exception(error_msg)
+
+    def measure_fluorescence_intensity(self, fluorescence_image, cell_mask, dark_correction=None, offset_correction=None, enable_offset_optimization=False):
         """
         测量荧光强度
         
@@ -354,11 +457,18 @@ class ImageProcessor:
             cell_mask: 细胞掩膜 (基于明场图像)
             dark_correction: 黑场校正图像
             offset_correction: 偏移校正 (x_offset, y_offset) - 明场相对荧光的偏移
+            enable_offset_optimization: 是否启用偏移优化
             
         Returns:
-            字典包含 mean, total, area
+            字典包含 mean, total, area, 以及可能的优化信息
         """
         try:
+            # 如果启用偏移优化，使用优化方法
+            if enable_offset_optimization:
+                base_offset = offset_correction if offset_correction is not None else (0, 0)
+                return self.optimize_offset_for_max_intensity(fluorescence_image, cell_mask, dark_correction, base_offset)
+            
+            # 原有的非优化方法
             # 提取R通道
             fluo_r = self.extract_bayer_r_channel(fluorescence_image)
             
@@ -629,7 +739,7 @@ class ImageProcessor:
         except Exception as e:
             self.log(f"创建预览图像失败: {str(e)}", "ERROR")
             
-    def process_batch(self, brightfield_path, fluorescence_folder, darkfield_paths, output_folder, roi=None, offset_correction=None):
+    def process_batch(self, brightfield_path, fluorescence_folder, darkfield_paths, output_folder, roi=None, offset_correction=None, enable_offset_optimization=False):
         """
         批量处理荧光图像
         
@@ -640,6 +750,7 @@ class ImageProcessor:
             output_folder: 输出文件夹
             roi: ROI区域 (x, y, width, height)
             offset_correction: 偏移校正 (x_offset, y_offset) - 明场相对荧光的偏移
+            enable_offset_optimization: 是否启用偏移优化 (±5像素搜索)
             
         Returns:
             处理是否成功
@@ -712,8 +823,8 @@ class ImageProcessor:
                     else:
                         elapsed_s = (timestamp - base_timestamp).total_seconds()
                         
-                    # 测量荧光强度（应用偏移校正）
-                    intensity_data = self.measure_fluorescence_intensity(fluo_image, cell_mask, dark_correction, offset_correction)
+                    # 测量荧光强度（应用偏移校正和可选的偏移优化）
+                    intensity_data = self.measure_fluorescence_intensity(fluo_image, cell_mask, dark_correction, offset_correction, enable_offset_optimization)
                     
                     # 记录结果
                     result = {
@@ -725,6 +836,15 @@ class ImageProcessor:
                         'Area': intensity_data['area'],
                         'filename': os.path.basename(fluo_path)
                     }
+                    
+                    # 如果启用了偏移优化，添加优化信息
+                    if enable_offset_optimization and 'optimized_offset' in intensity_data:
+                        opt_x, opt_y = intensity_data['optimized_offset']
+                        imp_x, imp_y = intensity_data['offset_improvement']
+                        result['Optimized_Offset_X'] = opt_x
+                        result['Optimized_Offset_Y'] = opt_y
+                        result['Offset_Improvement_X'] = imp_x
+                        result['Offset_Improvement_Y'] = imp_y
                     
                     results.append(result)
                     

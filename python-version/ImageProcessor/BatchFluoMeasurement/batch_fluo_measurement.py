@@ -52,6 +52,9 @@ class BatchFluoMeasurementApp:
         # 加载配置
         self.load_config()
         
+        # 设置关闭事件处理
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        
     def setup_logging(self):
         """设置日志系统"""
         log_format = '%(asctime)s - %(levelname)s - %(message)s'
@@ -179,10 +182,29 @@ class BatchFluoMeasurementApp:
         ttk.Label(param_frame, text=offset_info, foreground='gray', 
                  font=('Arial', 8)).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(2, 5))
         
+        # 偏移优化设置
+        ttk.Label(param_frame, text="偏移优化:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        
+        # 偏移优化子框架
+        optimization_frame = ttk.Frame(param_frame)
+        optimization_frame.grid(row=3, column=1, sticky=tk.W, padx=(5, 0), pady=2)
+        
+        # 启用偏移优化复选框
+        self.enable_offset_optimization_var = tk.BooleanVar(value=False)
+        self.offset_optimization_checkbox = ttk.Checkbutton(optimization_frame, 
+                                                           text="启用偏移优化 (±5像素搜索)", 
+                                                           variable=self.enable_offset_optimization_var)
+        self.offset_optimization_checkbox.pack(side=tk.LEFT)
+        
+        # 偏移优化说明
+        optimization_info = "为每张荧光图像搜索±5像素范围内的最佳偏移位置，以获得最高平均荧光强度 (121次尝试/图像)"
+        ttk.Label(param_frame, text=optimization_info, foreground='gray', 
+                 font=('Arial', 8)).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(2, 5))
+        
         # 参数说明
         info_text = "细胞检测参数通过动态预览窗口进行调整和保存"
         ttk.Label(param_frame, text=info_text, foreground='gray', 
-                 font=('Arial', 9)).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+                 font=('Arial', 9)).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
                  
     def on_offset_toggle(self):
         """偏移校正开关回调"""
@@ -412,7 +434,8 @@ class BatchFluoMeasurementApp:
             'darkfield_paths': self.darkfield_var.get().split(";") if self.darkfield_var.get() else [],
             'output_folder': self.output_var.get(),
             'roi': self.roi,
-            'offset_correction': self.get_offset_correction()
+            'offset_correction': self.get_offset_correction(),
+            'enable_offset_optimization': self.enable_offset_optimization_var.get()
         }
         
         # 在新线程中运行处理
@@ -447,17 +470,40 @@ class BatchFluoMeasurementApp:
                 darkfield_paths=self.processing_params['darkfield_paths'],
                 output_folder=self.processing_params['output_folder'],
                 roi=self.processing_params['roi'],
-                offset_correction=self.processing_params['offset_correction']
+                offset_correction=self.processing_params['offset_correction'],
+                enable_offset_optimization=self.processing_params['enable_offset_optimization']
             )
             
             if result:
-                self.root.after(0, self._on_processing_success)
+                try:
+                    self.root.after(0, self._on_processing_success)
+                except RuntimeError as e:
+                    if "main thread is not in main loop" in str(e):
+                        self.logger.info("批量处理成功完成（GUI已关闭）")
+                        print("[处理完成] 批量处理成功完成")
+                    else:
+                        raise
             else:
-                self.root.after(0, self._on_processing_failure)
+                try:
+                    self.root.after(0, self._on_processing_failure)
+                except RuntimeError as e:
+                    if "main thread is not in main loop" in str(e):
+                        self.logger.error("批量处理失败（GUI已关闭）")
+                        print("[处理失败] 批量处理失败")
+                    else:
+                        raise
                 
         except Exception as e:
             error_msg = str(e)
-            self.root.after(0, lambda: self.processing_failed(error_msg))
+            try:
+                self.root.after(0, lambda: self.processing_failed(error_msg))
+            except RuntimeError as e:
+                if "main thread is not in main loop" in str(e):
+                    # 主线程已退出，记录到文件和控制台
+                    self.logger.error(f"处理失败: {error_msg}")
+                    print(f"[处理失败] {error_msg}")
+                else:
+                    raise
             
     def _on_processing_success(self):
         """处理成功回调"""
@@ -497,6 +543,21 @@ class BatchFluoMeasurementApp:
         self.update_step("处理已停止")
         self.log_message("用户停止了处理")
         
+    def on_close(self):
+        """处理窗口关闭事件"""
+        if self.processing:
+            result = messagebox.askyesno(
+                "确认关闭", 
+                "批量处理正在进行中。\n是否停止处理并关闭窗口？"
+            )
+            if result:
+                self.stop_processing()
+                # 等待处理线程停止
+                self.root.after(500, self.on_close)
+            # 如果用户选择"否"，不关闭窗口
+        else:
+            self.root.destroy()
+        
     def validate_inputs(self, preview_mode=False):
         """验证输入参数"""
         if not self.brightfield_var.get():
@@ -514,43 +575,86 @@ class BatchFluoMeasurementApp:
         return True
         
     def update_step(self, step_text):
-        """更新当前步骤显示"""
+        """更新当前步骤显示（线程安全）"""
         self.current_step = step_text
-        self.step_var.set(step_text)
+        try:
+            self.root.after_idle(lambda: self.step_var.set(step_text))
+        except RuntimeError as e:
+            if "main thread is not in main loop" in str(e):
+                # 主线程已退出，跳过GUI更新
+                pass
+            else:
+                raise
         
     def update_progress(self, current, total, message=""):
-        """更新进度显示"""
+        """更新进度显示（线程安全）"""
         if total > 0:
             progress = (current / total) * 100
-            self.progress_var.set(progress)
-            self.progress_text_var.set(f"{current}/{total} ({progress:.1f}%)")
+            progress_text = f"{current}/{total} ({progress:.1f}%)"
+            
+            def update_gui():
+                self.progress_var.set(progress)
+                self.progress_text_var.set(progress_text)
+            
+            try:
+                self.root.after_idle(update_gui)
+            except RuntimeError as e:
+                if "main thread is not in main loop" in str(e):
+                    # 主线程已退出，跳过GUI更新
+                    pass
+                else:
+                    raise
         
         if message:
             self.update_step(message)
             
     def update_ui_state(self, processing):
-        """更新UI状态"""
-        if processing:
-            self.start_btn.config(state=tk.DISABLED)
-            self.preview_btn.config(state=tk.DISABLED)
-            self.roi_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.NORMAL)
-        else:
-            self.start_btn.config(state=tk.NORMAL)
-            self.preview_btn.config(state=tk.NORMAL)
-            self.roi_btn.config(state=tk.NORMAL)
-            self.stop_btn.config(state=tk.DISABLED)
+        """更新UI状态（线程安全）"""
+        def update_gui():
+            if processing:
+                self.start_btn.config(state=tk.DISABLED)
+                self.preview_btn.config(state=tk.DISABLED)
+                self.roi_btn.config(state=tk.DISABLED)
+                self.stop_btn.config(state=tk.NORMAL)
+            else:
+                self.start_btn.config(state=tk.NORMAL)
+                self.preview_btn.config(state=tk.NORMAL)
+                self.roi_btn.config(state=tk.NORMAL)
+                self.stop_btn.config(state=tk.DISABLED)
+        
+        try:
+            self.root.after_idle(update_gui)
+        except RuntimeError as e:
+            if "main thread is not in main loop" in str(e):
+                # 主线程已退出，跳过GUI更新
+                pass
+            else:
+                raise
             
     def log_message(self, message, level="INFO"):
-        """添加日志消息"""
+        """添加日志消息（线程安全）"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_entry = f"[{timestamp}] {level}: {message}\n"
         
-        # 添加到GUI日志
-        self.log_text.insert(tk.END, log_entry)
-        self.log_text.see(tk.END)
+        # 使用after_idle在主线程更新GUI日志（线程安全）
+        def update_gui():
+            try:
+                self.log_text.insert(tk.END, log_entry)
+                self.log_text.see(tk.END)
+            except tk.TclError:
+                # 窗口已销毁，跳过
+                pass
         
-        # 添加到文件日志
+        try:
+            self.root.after_idle(update_gui)
+        except RuntimeError as e:
+            if "main thread is not in main loop" in str(e):
+                # 主线程已退出，只记录到文件
+                print(f"[GUI已关闭] {log_entry}", end='')
+            else:
+                raise
+        
+        # 添加到文件日志（文件I/O是线程安全的）
         if level == "ERROR":
             self.logger.error(message)
         elif level == "WARNING":

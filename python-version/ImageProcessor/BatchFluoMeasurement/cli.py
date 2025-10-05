@@ -150,6 +150,14 @@ def main():
                        type=int, 
                        metavar=('X', 'Y', 'WIDTH', 'HEIGHT'),
                        help='ROI区域坐标 (x y width height)')
+    parser.add_argument('--offset', 
+                       nargs=2, 
+                       type=int, 
+                       metavar=('X_OFFSET', 'Y_OFFSET'),
+                       help='明场相对荧光的偏移校正 (x_offset y_offset)')
+    parser.add_argument('--optimize-offset', 
+                       action='store_true', 
+                       help='启用偏移优化 (在±5像素范围内搜索最佳偏移)')
     
     # 配置和日志选项
     parser.add_argument('--config', 
@@ -262,12 +270,24 @@ def main():
         # 批量处理
         logger.info("开始批量处理...")
         roi_tuple = tuple(args.roi) if args.roi else None
+        offset_tuple = tuple(args.offset) if args.offset else None
+        
+        # 如果启用了偏移优化，记录相关信息
+        if args.optimize_offset:
+            logger.info("启用偏移优化: 将在±5像素范围内搜索最佳偏移 (121次尝试/图像)")
+            if offset_tuple:
+                logger.info(f"基础偏移: X={offset_tuple[0]}, Y={offset_tuple[1]}")
+        elif offset_tuple:
+            logger.info(f"使用固定偏移校正: X={offset_tuple[0]}, Y={offset_tuple[1]}")
+            
         success = image_processor.process_batch(
             brightfield_path=args.brightfield,
             fluorescence_folder=args.input,
             darkfield_paths=args.dark if args.dark else [],
             output_folder=args.output,
-            roi=roi_tuple
+            roi=roi_tuple,
+            offset_correction=offset_tuple,
+            enable_offset_optimization=args.optimize_offset
         )
         
         if success:
