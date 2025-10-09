@@ -18,6 +18,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from scipy import ndimage
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # 忽略一些常见的警告
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -55,9 +57,26 @@ class ImageProcessor:
         self.logger = logging.getLogger(__name__)
         self.stop_flag = False
         
+        # 创建持久化线程池用于偏移优化 (避免重复创建/销毁线程开销)
+        self._thread_pool = None
+        self._max_workers = min(os.cpu_count() or 4, 16)
+        
         # 缓存变量
         self.cell_mask = None
         self.dark_correction = None
+    
+    def __del__(self):
+        """清理资源"""
+        self.cleanup()
+    
+    def cleanup(self):
+        """清理线程池资源"""
+        if self._thread_pool is not None:
+            try:
+                self._thread_pool.shutdown(wait=True, cancel_futures=False)
+                self._thread_pool = None
+            except Exception as e:
+                self.logger.warning(f"清理线程池时出错: {str(e)}")
         
     def log(self, message, level="INFO"):
         """记录日志"""
@@ -81,13 +100,14 @@ class ImageProcessor:
         self.stop_flag = True
         self.log("收到停止信号")
         
-    def load_tiff_image(self, file_path, use_memmap=None):
+    def load_tiff_image(self, file_path, use_memmap=None, silent=False):
         """
         加载TIFF图像，支持16位和BigTIFF
         
         Args:
             file_path: 图像文件路径
             use_memmap: 是否使用内存映射，None为自动判断
+            silent: 是否静默加载 (不输出日志)
             
         Returns:
             numpy数组形式的图像数据
@@ -99,15 +119,17 @@ class ImageProcessor:
                 use_memmap = file_size_mb > 500  # 大于500MB使用内存映射
                 
             if use_memmap:
-                self.log(f"使用内存映射加载大文件: {os.path.basename(file_path)}")
+                if not silent:
+                    self.log(f"使用内存映射加载大文件: {os.path.basename(file_path)}")
                 # 使用内存映射加载大文件
                 with tifffile.TiffFile(file_path) as tif:
                     image = tif.asarray(out='memmap')
             else:
                 # 直接加载到内存
                 image = tifffile.imread(file_path)
-                
-            self.log(f"成功加载图像: {os.path.basename(file_path)}, 形状: {image.shape}, 数据类型: {image.dtype}")
+            
+            if not silent:
+                self.log(f"成功加载图像: {os.path.basename(file_path)}, 形状: {image.shape}, 数据类型: {image.dtype}")
             
             # 验证图像尺寸（必须为偶数，用于Bayer拆分）
             if image.shape[0] % 2 != 0 or image.shape[1] % 2 != 0:
@@ -120,12 +142,13 @@ class ImageProcessor:
             self.log(error_msg, "ERROR")
             raise Exception(error_msg)
             
-    def extract_bayer_r_channel(self, image):
+    def extract_bayer_r_channel(self, image, silent=False):
         """
         从Bayer图像中提取R通道 (RGGB模式)
         
         Args:
             image: 输入的Bayer图像
+            silent: 是否静默执行 (不输出日志)
             
         Returns:
             R通道图像 (float32)
@@ -134,7 +157,8 @@ class ImageProcessor:
             # RGGB模式: R = 偶行偶列
             r_channel = image[0::2, 0::2].astype(np.float32)
             
-            self.log(f"Bayer R通道提取完成，形状: {r_channel.shape}")
+            if not silent:
+                self.log(f"Bayer R通道提取完成，形状: {r_channel.shape}")
             return r_channel
             
         except Exception as e:
@@ -185,13 +209,14 @@ class ImageProcessor:
             self.log(error_msg, "ERROR")
             raise Exception(error_msg)
             
-    def apply_dark_correction(self, image, dark_correction):
+    def apply_dark_correction(self, image, dark_correction, silent=False):
         """
         应用黑场校正
         
         Args:
             image: 输入图像
             dark_correction: 黑场校正图像
+            silent: 是否静默执行 (不输出日志)
             
         Returns:
             校正后的图像
@@ -204,7 +229,8 @@ class ImageProcessor:
             corrected = image - dark_correction
             corrected = np.maximum(corrected, 0)
             
-            self.log(f"黑场校正完成，校正前均值: {np.mean(image):.2f}, 校正后均值: {np.mean(corrected):.2f}")
+            if not silent:
+                self.log(f"黑场校正完成，校正前均值: {np.mean(image):.2f}, 校正后均值: {np.mean(corrected):.2f}")
             return corrected
             
         except Exception as e:
@@ -225,7 +251,9 @@ class ImageProcessor:
             细胞掩膜 (布尔数组)
         """
         try:
-            self.log("开始明场细胞检测")
+            # 收集处理步骤信息用于批量输出
+            detection_steps = []
+            detection_steps.append("开始明场细胞检测")
             
             # 提取R通道
             bf_r = self.extract_bayer_r_channel(brightfield_image)
@@ -236,7 +264,7 @@ class ImageProcessor:
             # 应用ROI限制
             if roi is not None:
                 x, y, w, h = roi
-                self.log(f"应用ROI限制: ({x}, {y}) 尺寸: {w}×{h}")
+                detection_steps.append(f"应用ROI限制: ({x}, {y}) 尺寸: {w}×{h}")
                 
                 # 创建ROI掩膜
                 roi_mask = np.zeros(bf_r_corrected.shape, dtype=bool)
@@ -265,11 +293,11 @@ class ImageProcessor:
             smoothing_radius = kwargs.get('smoothing_radius', 0)
             
             # 高斯模糊去噪
-            self.log(f"应用高斯模糊，σ = {gaussian_sigma}")
+            detection_steps.append(f"应用高斯模糊，σ = {gaussian_sigma}")
             blurred = filters.gaussian(processing_image, sigma=gaussian_sigma, preserve_range=True)
             
             # 自动阈值分割
-            self.log(f"应用阈值分割，方法: {threshold_method}")
+            detection_steps.append(f"应用阈值分割，方法: {threshold_method}")
             if threshold_method == 'otsu':
                 threshold = filters.threshold_otsu(blurred)
             elif threshold_method == 'triangle':
@@ -280,7 +308,7 @@ class ImageProcessor:
             binary_mask = blurred < threshold  # 细胞通常比背景暗
             
             # 形态学处理
-            self.log("应用形态学处理")
+            detection_steps.append("应用形态学处理")
             
             # 关闭操作 - 填充小洞
             if closing_radius > 0:
@@ -297,7 +325,7 @@ class ImageProcessor:
             
             # 边缘平滑处理 - 让细胞边缘更圆润
             if smoothing_radius > 0:
-                self.log(f"应用边缘平滑，半径 = {smoothing_radius}")
+                detection_steps.append(f"应用边缘平滑，半径 = {smoothing_radius}")
                 # 使用额外的关闭操作来平滑边缘
                 smoothing_kernel = morphology.disk(smoothing_radius)
                 binary_mask = morphology.binary_closing(binary_mask, smoothing_kernel)
@@ -310,7 +338,7 @@ class ImageProcessor:
             labeled_mask = measure.label(binary_mask)
             regions = measure.regionprops(labeled_mask)
             
-            self.log(f"检测到 {len(regions)} 个连通域")
+            detection_steps.append(f"检测到 {len(regions)} 个连通域")
             
             # 保留最大的几个连通域
             if len(regions) > self.max_components:
@@ -323,20 +351,24 @@ class ImageProcessor:
                 for label in keep_labels:
                     final_mask |= (labeled_mask == label)
                     
-                self.log(f"保留最大的 {self.max_components} 个连通域")
+                detection_steps.append(f"保留最大的 {self.max_components} 个连通域")
             else:
                 final_mask = binary_mask
                 
             # 应用ROI限制到最终掩膜
             if roi is not None:
                 final_mask = final_mask & roi_mask
-                self.log("已将细胞掩膜限制在ROI区域内")
+                detection_steps.append("已将细胞掩膜限制在ROI区域内")
             
             # 计算最终统计信息
             final_regions = measure.regionprops(measure.label(final_mask))
             total_area = sum(r.area for r in final_regions)
             
-            self.log(f"细胞检测完成，最终细胞数: {len(final_regions)}, 总面积: {total_area} 像素")
+            detection_steps.append(f"细胞检测完成，最终细胞数: {len(final_regions)}, 总面积: {total_area} 像素")
+            
+            # 批量输出所有检测步骤 (单次日志输出，避免I/O瓶颈)
+            detection_summary = "\n".join(detection_steps)
+            self.log(detection_summary)
             
             return final_mask
             
@@ -345,9 +377,47 @@ class ImageProcessor:
             self.log(error_msg, "ERROR")
             raise Exception(error_msg)
             
+    def _evaluate_single_offset(self, fluo_r_corrected, cell_mask, current_x, current_y, dx, dy, search_count, total_searches):
+        """
+        评估单个偏移位置的荧光强度 (并行处理辅助方法)
+        
+        Args:
+            fluo_r_corrected: 校正后的荧光R通道
+            cell_mask: 细胞掩膜
+            current_x: 当前X偏移
+            current_y: 当前Y偏移
+            dx: X方向改进量
+            dy: Y方向改进量
+            search_count: 搜索序号
+            total_searches: 总搜索数
+            
+        Returns:
+            评估结果字典或None
+        """
+        # 应用偏移到掩膜
+        corrected_mask = self._apply_offset_to_mask(cell_mask, current_x, current_y, fluo_r_corrected.shape)
+        
+        # 测量强度
+        cell_pixels = fluo_r_corrected[corrected_mask]
+        
+        if len(cell_pixels) > 0:
+            mean_intensity = float(np.mean(cell_pixels))
+            total_intensity = float(np.sum(cell_pixels))
+            area = len(cell_pixels)
+            
+            return {
+                'offset': (current_x, current_y),
+                'improvement': (dx, dy),
+                'mean': mean_intensity,
+                'total': total_intensity,
+                'area': area
+            }
+        else:
+            return None
+    
     def optimize_offset_for_max_intensity(self, fluorescence_image, cell_mask, dark_correction=None, base_offset=(0, 0), search_range=5):
         """
-        优化偏移量以获得最大平均荧光强度
+        优化偏移量以获得最大平均荧光强度 (并行版本)
         
         Args:
             fluorescence_image: 荧光图像
@@ -360,86 +430,102 @@ class ImageProcessor:
             字典包含最优偏移量和对应的强度数据
         """
         try:
-            # 提取R通道
-            fluo_r = self.extract_bayer_r_channel(fluorescence_image)
+            # 提取R通道 (静默模式)
+            fluo_r = self.extract_bayer_r_channel(fluorescence_image, silent=True)
             
-            # 应用黑场校正
-            fluo_r_corrected = self.apply_dark_correction(fluo_r, dark_correction)
+            # 应用黑场校正 (静默模式)
+            fluo_r_corrected = self.apply_dark_correction(fluo_r, dark_correction, silent=True)
             
             base_x, base_y = base_offset
-            best_mean = -1
-            best_offset = base_offset
-            best_result = None
-            
-            # 搜索范围内的所有偏移组合 (11x11 = 121 tries)
-            search_count = 0
             total_searches = (2 * search_range + 1) ** 2
             
-            self.log(f"开始偏移优化搜索: 基础偏移=({base_x}, {base_y}), 搜索范围=±{search_range}像素")
+            # 使用持久化线程池 (避免重复创建/销毁线程开销)
+            if self._thread_pool is None:
+                self._thread_pool = ThreadPoolExecutor(max_workers=self._max_workers)
+                self.log(f"创建持久化线程池: {self._max_workers}线程")
             
+            self.log(f"开始偏移优化搜索 (并行处理, {self._max_workers}线程): 基础偏移=({base_x}, {base_y}), 搜索范围=±{search_range}像素，共{total_searches}个位置...")
+            
+            # 生成所有要测试的偏移位置
+            offset_tasks = []
+            search_count = 0
             for dx in range(-search_range, search_range + 1):
                 for dy in range(-search_range, search_range + 1):
                     search_count += 1
-                    
-                    # 计算当前偏移
                     current_x = base_x + dx
                     current_y = base_y + dy
-                    
-                    # 应用偏移到掩膜
-                    corrected_mask = self._apply_offset_to_mask(cell_mask, current_x, current_y, fluo_r_corrected.shape)
-                    
-                    # 测量强度
-                    cell_pixels = fluo_r_corrected[corrected_mask]
-                    
-                    if len(cell_pixels) > 0:
-                        mean_intensity = float(np.mean(cell_pixels))
-                        
-                        # 显示每个偏移参数下的Mean值
-                        self.log(f"偏移({current_x:+3d}, {current_y:+3d}) -> Mean: {mean_intensity:.2f} (搜索 {search_count}/{total_searches})")
-                        
-                        # 如果找到更高的平均强度，更新最佳结果
-                        if mean_intensity > best_mean:
-                            best_mean = mean_intensity
-                            best_offset = (current_x, current_y)
-                            
-                            # 计算完整的强度数据
-                            area = len(cell_pixels)
-                            total_intensity = float(np.sum(cell_pixels))
-                            
+                    offset_tasks.append((current_x, current_y, dx, dy, search_count))
+            
+            # 并行评估所有偏移位置
+            best_result = None
+            best_mean = -1
+            results_lock = threading.Lock()
+            completed_count = 0
+            
+            executor = self._thread_pool
+            # 提交所有任务
+            future_to_offset = {}
+            for current_x, current_y, dx, dy, search_count in offset_tasks:
+                future = executor.submit(
+                    self._evaluate_single_offset,
+                    fluo_r_corrected,
+                    cell_mask,
+                    current_x,
+                    current_y,
+                    dx,
+                    dy,
+                    search_count,
+                    total_searches
+                )
+                future_to_offset[future] = (current_x, current_y, dx, dy)
+            
+            # 收集结果
+            for future in as_completed(future_to_offset):
+                result = future.result()
+                completed_count += 1
+                if result is not None:
+                    with results_lock:
+                        if result['mean'] > best_mean:
+                            best_mean = result['mean']
+                            current_x, current_y, dx, dy = future_to_offset[future]
                             best_result = {
-                                'mean': mean_intensity,
-                                'total': total_intensity,
-                                'area': area,
-                                'optimized_offset': best_offset,
+                                'mean': result['mean'],
+                                'total': result['total'],
+                                'area': result['area'],
+                                'optimized_offset': (current_x, current_y),
                                 'offset_improvement': (dx, dy)
                             }
-                            
-                            self.log(f"*** 发现更佳偏移: ({current_x:+3d}, {current_y:+3d}) -> Mean: {mean_intensity:.2f} ***")
-                    else:
-                        # 如果掩膜为空，也记录这个情况
-                        self.log(f"偏移({current_x:+3d}, {current_y:+3d}) -> Mean: 0.00 (掩膜为空) (搜索 {search_count}/{total_searches})")
             
+            # 所有位置评估完成，输出结果
+            self.log(f"偏移优化搜索完成: 已评估 {completed_count}/{total_searches} 个位置")
+            
+            # 检查是否找到有效结果
             if best_result is None:
                 self.log("警告: 偏移优化未找到有效掩膜", "WARNING")
                 return {
-                    'mean': 0.0, 
-                    'total': 0.0, 
+                    'mean': 0.0,
+                    'total': 0.0,
                     'area': 0,
                     'optimized_offset': base_offset,
                     'offset_improvement': (0, 0)
                 }
             
+            # 输出总结 (单次日志输出，避免I/O瓶颈)
             improvement_x, improvement_y = best_result['offset_improvement']
             final_x, final_y = best_result['optimized_offset']
             
-            self.log(f"偏移优化完成总结:")
-            self.log(f"  - 搜索位置数: {total_searches}")
-            self.log(f"  - 基础偏移: ({base_x:+d}, {base_y:+d})")
-            self.log(f"  - 最佳偏移: ({final_x:+d}, {final_y:+d})")
-            self.log(f"  - 偏移改进: ({improvement_x:+d}, {improvement_y:+d})")
-            self.log(f"  - 最佳平均强度: {best_mean:.2f}")
-            self.log(f"  - 细胞面积: {best_result['area']} 像素")
-            self.log(f"  - 总强度: {best_result['total']:.2f}")
+            summary = (
+                f"偏移优化完成总结 (并行处理):\n"
+                f"  - 搜索位置数: {total_searches}\n"
+                f"  - 并行线程数: {max_workers}\n"
+                f"  - 基础偏移: ({base_x:+d}, {base_y:+d})\n"
+                f"  - 最佳偏移: ({final_x:+d}, {final_y:+d})\n"
+                f"  - 偏移改进: ({improvement_x:+d}, {improvement_y:+d})\n"
+                f"  - 最佳平均强度: {best_mean:.2f}\n"
+                f"  - 细胞面积: {best_result['area']} 像素\n"
+                f"  - 总强度: {best_result['total']:.2f}"
+            )
+            self.log(summary)
             
             return best_result
             
@@ -448,7 +534,7 @@ class ImageProcessor:
             self.log(error_msg, "ERROR")
             raise Exception(error_msg)
 
-    def measure_fluorescence_intensity(self, fluorescence_image, cell_mask, dark_correction=None, offset_correction=None, enable_offset_optimization=False):
+    def measure_fluorescence_intensity(self, fluorescence_image, cell_mask, dark_correction=None, offset_correction=None, enable_offset_optimization=False, search_range=5):
         """
         测量荧光强度
         
@@ -458,6 +544,7 @@ class ImageProcessor:
             dark_correction: 黑场校正图像
             offset_correction: 偏移校正 (x_offset, y_offset) - 明场相对荧光的偏移
             enable_offset_optimization: 是否启用偏移优化
+            search_range: 搜索范围 (±像素数)
             
         Returns:
             字典包含 mean, total, area, 以及可能的优化信息
@@ -466,26 +553,22 @@ class ImageProcessor:
             # 如果启用偏移优化，使用优化方法
             if enable_offset_optimization:
                 base_offset = offset_correction if offset_correction is not None else (0, 0)
-                return self.optimize_offset_for_max_intensity(fluorescence_image, cell_mask, dark_correction, base_offset)
+                return self.optimize_offset_for_max_intensity(fluorescence_image, cell_mask, dark_correction, base_offset, search_range)
             
             # 原有的非优化方法
-            # 提取R通道
-            fluo_r = self.extract_bayer_r_channel(fluorescence_image)
+            # 提取R通道 (静默模式)
+            fluo_r = self.extract_bayer_r_channel(fluorescence_image, silent=True)
             
-            # 应用黑场校正
-            fluo_r_corrected = self.apply_dark_correction(fluo_r, dark_correction)
+            # 应用黑场校正 (静默模式)
+            fluo_r_corrected = self.apply_dark_correction(fluo_r, dark_correction, silent=True)
             
             # 应用偏移校正
             if offset_correction is not None:
                 x_offset, y_offset = offset_correction
-                self.log(f"应用偏移校正: X={x_offset}, Y={y_offset} 像素")
-                
                 # 创建偏移后的细胞掩膜
                 corrected_mask = self._apply_offset_to_mask(cell_mask, x_offset, y_offset, fluo_r_corrected.shape)
-                self.log(f"偏移校正后掩膜面积: {np.sum(corrected_mask)} 像素 (原始: {np.sum(cell_mask)} 像素)")
             else:
                 corrected_mask = cell_mask
-                self.log("未应用偏移校正")
             
             # 在细胞区域内测量
             cell_pixels = fluo_r_corrected[corrected_mask]
@@ -512,7 +595,7 @@ class ImageProcessor:
             
     def _apply_offset_to_mask(self, mask, x_offset, y_offset, target_shape):
         """
-        对掩膜应用偏移校正
+        对掩膜应用偏移校正 (优化版本使用数组切片)
         
         Args:
             mask: 原始掩膜 (基于明场图像)
@@ -527,38 +610,39 @@ class ImageProcessor:
             # 创建新的掩膜
             corrected_mask = np.zeros(target_shape, dtype=bool)
             
-            # 获取原始掩膜的有效区域
-            mask_y, mask_x = np.where(mask)
+            # 快速检查: 如果没有偏移且形状相同，直接返回
+            if x_offset == 0 and y_offset == 0 and mask.shape == target_shape:
+                return mask.copy()
             
-            if len(mask_y) == 0:
-                self.log("原始掩膜为空", "WARNING")
+            # 计算源掩膜中需要提取的区域 (考虑偏移后仍在目标范围内的部分)
+            # y方向: 源掩膜的y坐标范围
+            y_src_start = max(0, -y_offset)
+            y_src_end = min(mask.shape[0], target_shape[0] - y_offset)
+            
+            # x方向: 源掩膜的x坐标范围
+            x_src_start = max(0, -x_offset)
+            x_src_end = min(mask.shape[1], target_shape[1] - x_offset)
+            
+            # 如果没有重叠区域，返回空掩膜
+            if y_src_start >= y_src_end or x_src_start >= x_src_end:
                 return corrected_mask
             
-            # 应用偏移校正
-            # 如果明场相对荧光向上偏移16像素，那么要在荧光图像中找到对应位置，需要向下偏移16像素
-            new_x = mask_x + x_offset  # X偏移校正
-            new_y = mask_y + y_offset  # Y偏移校正 (正值表示明场向上偏移，需要向下校正)
+            # 计算目标掩膜中的放置位置
+            y_dst_start = y_src_start + y_offset
+            y_dst_end = y_dst_start + (y_src_end - y_src_start)
+            x_dst_start = x_src_start + x_offset
+            x_dst_end = x_dst_start + (x_src_end - x_src_start)
             
-            # 边界检查
-            valid_indices = (
-                (new_x >= 0) & (new_x < target_shape[1]) &
-                (new_y >= 0) & (new_y < target_shape[0])
-            )
-            
-            valid_x = new_x[valid_indices]
-            valid_y = new_y[valid_indices]
-            
-            # 设置偏移后的掩膜
-            if len(valid_x) > 0:
-                corrected_mask[valid_y, valid_x] = True
-                
-            self.log(f"偏移校正完成: 原始点数={len(mask_y)}, 校正后有效点数={len(valid_x)}, 偏移量=({x_offset},{y_offset})")
+            # 使用数组切片直接复制区域 (比逐点操作快得多)
+            corrected_mask[y_dst_start:y_dst_end, x_dst_start:x_dst_end] = \
+                mask[y_src_start:y_src_end, x_src_start:x_src_end]
             
             return corrected_mask
             
         except Exception as e:
             self.log(f"偏移校正失败: {str(e)}", "ERROR")
-            return mask  # 返回原始掩膜作为备用
+            # 如果失败，尝试返回形状匹配的空掩膜
+            return np.zeros(target_shape, dtype=bool)
             
     def extract_timestamp_from_arw(self, tiff_path):
         """
@@ -739,7 +823,7 @@ class ImageProcessor:
         except Exception as e:
             self.log(f"创建预览图像失败: {str(e)}", "ERROR")
             
-    def process_batch(self, brightfield_path, fluorescence_folder, darkfield_paths, output_folder, roi=None, offset_correction=None, enable_offset_optimization=False):
+    def process_batch(self, brightfield_path, fluorescence_folder, darkfield_paths, output_folder, roi=None, offset_correction=None, enable_offset_optimization=False, search_range=5):
         """
         批量处理荧光图像
         
@@ -750,12 +834,16 @@ class ImageProcessor:
             output_folder: 输出文件夹
             roi: ROI区域 (x, y, width, height)
             offset_correction: 偏移校正 (x_offset, y_offset) - 明场相对荧光的偏移
-            enable_offset_optimization: 是否启用偏移优化 (±5像素搜索)
+            enable_offset_optimization: 是否启用偏移优化
+            search_range: 搜索范围 (±像素数)
             
         Returns:
             处理是否成功
         """
         try:
+            import time
+            batch_start_time = time.perf_counter()
+            
             self.log("开始批量荧光强度测量")
             
             # 创建输出目录
@@ -765,19 +853,28 @@ class ImageProcessor:
             
             # 1. 加载明场图像并检测细胞
             self.update_progress(0, 100, "加载明场图像...")
+            t0 = time.perf_counter()
             bf_image = self.load_tiff_image(brightfield_path)
+            t1 = time.perf_counter()
+            self.log(f"⏱️ 明场图像加载用时: {(t1-t0)*1000:.1f}ms")
             
             # 2. 计算黑场校正
             self.update_progress(10, 100, "计算黑场校正...")
             dark_correction = None
             if darkfield_paths:
+                t0 = time.perf_counter()
                 dark_correction = self.calculate_dark_correction(darkfield_paths)
                 self.dark_correction = dark_correction
+                t1 = time.perf_counter()
+                self.log(f"⏱️ 黑场校正计算用时: {(t1-t0)*1000:.1f}ms")
                 
             # 3. 检测细胞
             self.update_progress(20, 100, "检测细胞...")
+            t0 = time.perf_counter()
             cell_mask = self.detect_cells_in_brightfield(bf_image, dark_correction, roi)
             self.cell_mask = cell_mask
+            t1 = time.perf_counter()
+            self.log(f"⏱️ 细胞检测用时: {(t1-t0)*1000:.1f}ms")
             
             # 保存细胞掩膜
             mask_path = os.path.join(results_dir, "masks", "cell_mask.png")
@@ -796,24 +893,39 @@ class ImageProcessor:
             # 5. 处理每个荧光图像
             results = []
             base_timestamp = None
+            total_files = len(fluorescence_files)
+            
+            # 初始化计时统计
+            total_load_time = 0.0
+            total_measure_time = 0.0
+            total_vis_time = 0.0
             
             for i, fluo_path in enumerate(fluorescence_files):
                 if self.stop_flag:
                     self.log("处理被用户停止")
                     return False
                     
-                progress = 30 + (i / len(fluorescence_files)) * 60
-                self.update_progress(progress, 100, f"处理荧光图像 {i+1}/{len(fluorescence_files)}")
+                # 更细粒度的进度计算: 30% 基础 + 60% 文件处理
+                file_progress = 30.0 + (i / total_files) * 60.0
+                self.update_progress(file_progress, 100, f"处理荧光图像 {i+1}/{total_files}")
                 
                 try:
-                    # 加载荧光图像
-                    fluo_image = self.load_tiff_image(fluo_path)
+                    # 加载荧光图像 (静默模式)
+                    t0 = time.perf_counter()
+                    fluo_image = self.load_tiff_image(fluo_path, silent=True)
+                    t1 = time.perf_counter()
+                    load_time = (t1 - t0) * 1000
+                    total_load_time += load_time
+                    
+                    # 输出前3张图片的详细计时以观察缓存效果
+                    if i < 3:
+                        self.log(f"⏱️ 图像 #{i+1} 加载用时: {load_time:.1f}ms")
                     
                     # 提取时间戳
                     timestamp = self.extract_timestamp_from_exif(fluo_path)
                     
                     if timestamp is None:
-                        self.log(f"跳过无时间戳的文件: {os.path.basename(fluo_path)}", "WARNING")
+                        # 静默跳过 (不记录日志)
                         continue
                         
                     # 计算相对时间
@@ -824,7 +936,19 @@ class ImageProcessor:
                         elapsed_s = (timestamp - base_timestamp).total_seconds()
                         
                     # 测量荧光强度（应用偏移校正和可选的偏移优化）
-                    intensity_data = self.measure_fluorescence_intensity(fluo_image, cell_mask, dark_correction, offset_correction, enable_offset_optimization)
+                    t0 = time.perf_counter()
+                    intensity_data = self.measure_fluorescence_intensity(fluo_image, cell_mask, dark_correction, offset_correction, enable_offset_optimization, search_range)
+                    t1 = time.perf_counter()
+                    measure_time = (t1 - t0) * 1000
+                    total_measure_time += measure_time
+                    
+                    # 输出前3张图片的测量计时（包含偏移优化时间）
+                    if i < 3:
+                        opt_info = ""
+                        if enable_offset_optimization and 'optimized_offset' in intensity_data:
+                            opt_x, opt_y = intensity_data['optimized_offset']
+                            opt_info = f" (优化偏移: ({opt_x}, {opt_y}))"
+                        self.log(f"⏱️ 图像 #{i+1} 测量用时: {measure_time:.1f}ms{opt_info}")
                     
                     # 记录结果
                     result = {
@@ -848,30 +972,31 @@ class ImageProcessor:
                     
                     results.append(result)
                     
-                    # 创建单张荧光图像的ROI可视化
+                    # 创建单张荧光图像的ROI可视化 (静默模式)
                     try:
+                        t0 = time.perf_counter()
                         roi_vis_dir = os.path.join(results_dir, "roi_visualizations")
                         os.makedirs(roi_vis_dir, exist_ok=True)
                         roi_vis_path = os.path.join(roi_vis_dir, f"roi_vis_{os.path.splitext(os.path.basename(fluo_path))[0]}.png")
-                        self.log(f"创建ROI可视化: {roi_vis_path}")
                         
-                        # 传递完整的细胞掩膜和偏移校正参数
-                        self.create_fluorescence_roi_visualization(fluo_image, self.cell_mask, roi, intensity_data, roi_vis_path, elapsed_s, offset_correction)
+                        # 使用优化后的偏移（如果启用了优化），否则使用基础偏移
+                        vis_offset = intensity_data.get('optimized_offset', offset_correction) if enable_offset_optimization else offset_correction
                         
-                        # 验证文件是否创建成功
-                        if os.path.exists(roi_vis_path):
-                            file_size = os.path.getsize(roi_vis_path)
-                            self.log(f"ROI可视化已保存: {roi_vis_path} (大小: {file_size} bytes)")
-                        else:
-                            self.log(f"ROI可视化文件未创建: {roi_vis_path}", "ERROR")
+                        # 传递完整的细胞掩膜和实际使用的偏移校正参数 (静默模式)
+                        self.create_fluorescence_roi_visualization(fluo_image, self.cell_mask, roi, intensity_data, roi_vis_path, elapsed_s, vis_offset, silent=True)
+                        t1 = time.perf_counter()
+                        vis_time = (t1 - t0) * 1000
+                        total_vis_time += vis_time
                             
                     except Exception as vis_error:
-                        self.log(f"创建ROI可视化失败 {os.path.basename(fluo_path)}: {str(vis_error)}", "ERROR")
-                        import traceback
-                        self.log(f"ROI可视化详细错误: {traceback.format_exc()}", "ERROR")
+                        # 静默失败 (仅记录关键错误)
+                        if i == 0:  # 仅在第一个文件失败时警告
+                            self.log(f"创建ROI可视化失败: {str(vis_error)}", "WARNING")
                     
                 except Exception as e:
-                    self.log(f"处理文件失败 {os.path.basename(fluo_path)}: {str(e)}", "ERROR")
+                    # 静默失败 (仅记录关键错误)
+                    if i == 0:  # 仅在第一个文件失败时警告
+                        self.log(f"处理文件失败: {str(e)}", "WARNING")
                     continue
                     
             # 6. 保存结果
@@ -885,14 +1010,13 @@ class ImageProcessor:
                 df = pd.DataFrame(results)
                 df.to_csv(csv_path, index=False, encoding='utf-8-sig')
                 
-                # 创建叠加图像
+                # 创建叠加图像 (静默模式)
                 try:
                     overlay_path = os.path.join(results_dir, "images", "cell_overlay.png")
                     os.makedirs(os.path.dirname(overlay_path), exist_ok=True)
-                    self.log(f"创建明场叠加图像: {overlay_path}")
                     self.create_overlay_image(bf_image, cell_mask, overlay_path)
                 except Exception as overlay_error:
-                    self.log(f"创建明场叠加图像失败: {str(overlay_error)}", "ERROR")
+                    self.log(f"创建明场叠加图像失败: {str(overlay_error)}", "WARNING")
                 
                 # 保存处理日志
                 log_path = os.path.join(results_dir, "logs", "processing_log.txt")
@@ -900,12 +1024,37 @@ class ImageProcessor:
                 self.save_processing_log(log_path, len(results), len(fluorescence_files))
                 
                 self.update_progress(100, 100, "处理完成！")
-                self.log(f"批量处理完成！成功处理 {len(results)}/{len(fluorescence_files)} 个文件")
-                self.log(f"结果已保存到: {results_dir}")
-                self.log(f"- CSV数据: csv/fluorescence_intensity_results.csv")
-                self.log(f"- 细胞掩膜: masks/cell_mask.png")
-                self.log(f"- 明场叠加图: images/cell_overlay.png")
-                self.log(f"- ROI可视化: roi_visualizations/ ({len(results)} 张图像)")
+                
+                # 计算总用时
+                batch_end_time = time.perf_counter()
+                total_batch_time = batch_end_time - batch_start_time
+                
+                # 计算平均用时
+                num_processed = len(results)
+                avg_load_time = total_load_time / num_processed if num_processed > 0 else 0
+                avg_measure_time = total_measure_time / num_processed if num_processed > 0 else 0
+                avg_vis_time = total_vis_time / num_processed if num_processed > 0 else 0
+                avg_total_per_image = (total_load_time + total_measure_time + total_vis_time) / num_processed if num_processed > 0 else 0
+                
+                # 批量输出最终总结 (单次日志输出，避免I/O瓶颈)
+                completion_summary = (
+                    f"\n批量处理完成！\n"
+                    f"成功处理: {len(results)}/{len(fluorescence_files)} 个文件\n"
+                    f"结果目录: {results_dir}\n"
+                    f"  - CSV数据: csv/fluorescence_intensity_results.csv\n"
+                    f"  - 细胞掩膜: masks/cell_mask.png\n"
+                    f"  - ROI可视化: roi_visualizations/ ({len(results)} 个文件)\n"
+                    f"  - 明场叠加图: images/cell_overlay.png\n"
+                    f"\n⏱️ 性能统计:\n"
+                    f"  总用时: {total_batch_time:.2f}s\n"
+                    f"  单图平均:\n"
+                    f"    - 加载: {avg_load_time:.1f}ms\n"
+                    f"    - 测量: {avg_measure_time:.1f}ms\n"
+                    f"    - 可视化: {avg_vis_time:.1f}ms\n"
+                    f"    - 总计: {avg_total_per_image:.1f}ms\n"
+                    f"  吞吐量: {num_processed / total_batch_time:.2f} 图像/秒"
+                )
+                self.log(completion_summary)
                 
                 return True
             else:
@@ -980,7 +1129,7 @@ class ImageProcessor:
         except Exception as e:
             self.log(f"创建叠加图像失败: {str(e)}", "ERROR")
             
-    def create_fluorescence_roi_visualization(self, fluorescence_image, cell_mask, roi, intensity_data, output_path, elapsed_time, offset_correction=None):
+    def create_fluorescence_roi_visualization(self, fluorescence_image, cell_mask, roi, intensity_data, output_path, elapsed_time, offset_correction=None, silent=False):
         """
         创建荧光图像的ROI可视化，包含细胞轮廓和测量值
         
@@ -992,39 +1141,31 @@ class ImageProcessor:
             output_path: 输出路径
             elapsed_time: 经过的时间（秒）
             offset_correction: 偏移校正 (x_offset, y_offset)
+            silent: 是否静默执行 (不输出日志)
         """
         try:
             # 确保numpy可用
             import numpy as np
-            self.log(f"开始创建ROI可视化，荧光图像形状: {fluorescence_image.shape}")
-            if cell_mask is not None:
-                self.log(f"细胞掩膜形状: {cell_mask.shape}")
             
-            # 提取荧光图像的R通道
-            fluo_r = self.extract_bayer_r_channel(fluorescence_image)
-            self.log(f"R通道提取完成，形状: {fluo_r.shape}")
+            # 提取荧光图像的R通道 (静默模式)
+            fluo_r = self.extract_bayer_r_channel(fluorescence_image, silent=True)
             
             # 应用黑场校正
             if hasattr(self, 'dark_correction') and self.dark_correction is not None:
                 fluo_r_corrected = np.clip(fluo_r.astype(np.float32) - self.dark_correction, 0, None)
-                self.log("已应用黑场校正")
             else:
                 fluo_r_corrected = fluo_r.astype(np.float32)
-                self.log("未应用黑场校正")
             
             # 应用偏移校正到细胞掩膜
             if offset_correction is not None and cell_mask is not None:
                 x_offset, y_offset = offset_correction
-                self.log(f"可视化中应用偏移校正: X={x_offset}, Y={y_offset}")
                 corrected_cell_mask = self._apply_offset_to_mask(cell_mask, x_offset, y_offset, fluo_r_corrected.shape)
             else:
                 corrected_cell_mask = cell_mask
-                self.log("可视化中未应用偏移校正")
             
             # 处理ROI区域
             if roi and len(roi) == 4:
                 x, y, w, h = roi
-                self.log(f"ROI参数: ({x}, {y}) 尺寸: {w}×{h}")
                 
                 # 确保ROI在图像范围内
                 img_h, img_w = fluo_r_corrected.shape
@@ -1034,33 +1175,27 @@ class ImageProcessor:
                 h = min(h, img_h - y)
                 
                 if w <= 0 or h <= 0:
-                    self.log("ROI区域无效，使用全图", "WARNING")
+                    if not silent:
+                        self.log("ROI区域无效，使用全图", "WARNING")
                     roi_image = fluo_r_corrected.copy()
                     roi_mask = corrected_cell_mask.copy() if corrected_cell_mask is not None else None
                 else:
-                    self.log(f"调整后ROI: ({x}, {y}) 尺寸: {w}×{h}")
-                    
                     # 截取ROI区域
                     roi_image = fluo_r_corrected[y:y+h, x:x+w].copy()
                     roi_mask = corrected_cell_mask[y:y+h, x:x+w].copy() if corrected_cell_mask is not None else None
-                    self.log(f"ROI图像形状: {roi_image.shape}")
             else:
                 # 如果没有ROI，使用整个图像
                 roi_image = fluo_r_corrected.copy()
                 roi_mask = corrected_cell_mask.copy() if corrected_cell_mask is not None else None
-                self.log("使用全图模式")
             
             # 归一化到0-255用于显示
             if roi_image.max() > roi_image.min():
                 roi_normalized = ((roi_image - roi_image.min()) / (roi_image.max() - roi_image.min()) * 255).astype(np.uint8)
-                self.log(f"图像归一化完成，范围: {roi_image.min():.1f} - {roi_image.max():.1f}")
             else:
                 roi_normalized = np.zeros_like(roi_image, dtype=np.uint8)
-                self.log("图像强度均匀，使用零图像")
             
             # 创建伪彩色图像（使用jet colormap）
             roi_colored = cv2.applyColorMap(roi_normalized, cv2.COLORMAP_JET)
-            self.log(f"伪彩色图像创建完成，形状: {roi_colored.shape}")
             
             # 验证图像数据
             if roi_colored is None or roi_colored.size == 0:
@@ -1068,60 +1203,25 @@ class ImageProcessor:
             
             if len(roi_colored.shape) != 3 or roi_colored.shape[2] != 3:
                 raise Exception(f"图像格式错误，期望3通道，实际: {roi_colored.shape}")
-                
-            self.log(f"图像数据验证通过，数据类型: {roi_colored.dtype}, 值范围: {roi_colored.min()}-{roi_colored.max()}")
             
             # 绘制细胞轮廓
             if roi_mask is not None and roi_mask.size > 0:
                 contours, _ = cv2.findContours(roi_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                self.log(f"找到 {len(contours)} 个轮廓")
                 
-                # 绘制轮廓（白色，较粗的线条）
-                for i, contour in enumerate(contours):
-                    cv2.drawContours(roi_colored, [contour], -1, (255, 255, 255), 2)
-                    self.log(f"绘制轮廓 {i+1}, 点数: {len(contour)}")
-            else:
-                self.log("没有细胞掩膜或掩膜为空")
+                # 绘制轮廓（白色，细线条）
+                for contour in contours:
+                    cv2.drawContours(roi_colored, [contour], -1, (255, 255, 255), 1)
             
-            # 添加测量信息文本
-            try:
-                info_texts = [
-                    f"Time: {elapsed_time:.1f}s",
-                    f"Mean: {intensity_data.get('mean', 0):.1f}",
-                    f"Total: {intensity_data.get('total', 0):.0f}",
-                    f"Area: {intensity_data.get('area', 0)} px"
-                ]
-                
-                # 添加偏移校正信息
-                if offset_correction is not None:
-                    x_offset, y_offset = offset_correction
-                    info_texts.append(f"Offset: ({x_offset},{y_offset})")
-                else:
-                    info_texts.append("Offset: None")
-                
-                # 计算文本位置和背景
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.5
-                thickness = 1
-                text_color = (255, 255, 255)  # 白色文字
-                
-                # 添加文本（简化版本）
-                for i, text in enumerate(info_texts):
-                    y_pos = 20 + i * 20
-                    cv2.putText(roi_colored, text, (10, y_pos), font, font_scale, text_color, thickness)
-                
-                self.log("文本信息已添加")
-                
-            except Exception as text_error:
-                self.log(f"添加文本信息失败: {str(text_error)}", "WARNING")
+            # Text overlay disabled - clean visualization only
             
             # 保存图像 - 简化的保存方法
             self._save_roi_image(roi_colored, output_path)
             
         except Exception as e:
-            self.log(f"创建荧光ROI可视化失败: {str(e)}", "ERROR")
-            import traceback
-            self.log(f"详细错误信息: {traceback.format_exc()}", "ERROR")
+            if not silent:
+                self.log(f"创建荧光ROI可视化失败: {str(e)}", "ERROR")
+                import traceback
+                self.log(f"详细错误信息: {traceback.format_exc()}", "ERROR")
             
     def _save_roi_image(self, image, output_path):
         """

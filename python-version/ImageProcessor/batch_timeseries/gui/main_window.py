@@ -192,12 +192,20 @@ class BatchFluoMeasurementApp:
         # 启用偏移优化复选框
         self.enable_offset_optimization_var = tk.BooleanVar(value=False)
         self.offset_optimization_checkbox = ttk.Checkbutton(optimization_frame, 
-                                                           text="启用偏移优化 (±5像素搜索)", 
-                                                           variable=self.enable_offset_optimization_var)
+                                                           text="启用偏移优化", 
+                                                           variable=self.enable_offset_optimization_var,
+                                                           command=self.on_optimization_toggle)
         self.offset_optimization_checkbox.pack(side=tk.LEFT)
         
+        # 搜索范围输入框
+        ttk.Label(optimization_frame, text="搜索范围(±像素):").pack(side=tk.LEFT, padx=(10, 5))
+        self.search_range_var = tk.StringVar(value="5")
+        self.search_range_entry = ttk.Entry(optimization_frame, textvariable=self.search_range_var, width=6)
+        self.search_range_entry.pack(side=tk.LEFT)
+        self.search_range_entry.config(state='disabled')
+        
         # 偏移优化说明
-        optimization_info = "为每张荧光图像搜索±5像素范围内的最佳偏移位置，以获得最高平均荧光强度 (121次尝试/图像)"
+        optimization_info = "为每张荧光图像搜索±N像素范围内的最佳偏移位置，以获得最高平均荧光强度"
         ttk.Label(param_frame, text=optimization_info, foreground='gray', 
                  font=('Arial', 8)).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(2, 5))
         
@@ -212,6 +220,12 @@ class BatchFluoMeasurementApp:
         state = 'normal' if enabled else 'disabled'
         self.y_offset_entry.config(state=state)
         self.x_offset_entry.config(state=state)
+    
+    def on_optimization_toggle(self):
+        """偏移优化开关回调"""
+        enabled = self.enable_offset_optimization_var.get()
+        state = 'normal' if enabled else 'disabled'
+        self.search_range_entry.config(state=state)
         
     def get_offset_correction(self):
         """获取偏移校正参数"""
@@ -224,6 +238,14 @@ class BatchFluoMeasurementApp:
             return (x_offset, y_offset)
         except ValueError:
             return None
+    
+    def get_search_range(self):
+        """获取搜索范围参数"""
+        try:
+            search_range = int(self.search_range_var.get())
+            return max(1, min(search_range, 20))  # 限制在1-20像素范围内
+        except ValueError:
+            return 5  # 默认值
         
     def create_control_area(self, parent, row):
         """创建控制按钮区域"""
@@ -438,7 +460,8 @@ class BatchFluoMeasurementApp:
             'output_folder': self.output_var.get(),
             'roi': self.roi,
             'offset_correction': self.get_offset_correction(),
-            'enable_offset_optimization': self.enable_offset_optimization_var.get()
+            'enable_offset_optimization': self.enable_offset_optimization_var.get(),
+            'search_range': self.get_search_range()
         }
         
         # 在新线程中运行处理
@@ -462,8 +485,8 @@ class BatchFluoMeasurementApp:
                 min_area=cell_params.get("min_area", 500),
                 closing_radius=cell_params.get("closing_radius", 5),
                 opening_radius=cell_params.get("opening_radius", 2),
-                progress_callback=self.update_progress,
-                log_callback=self.log_message
+                progress_callback=self.update_progress
+                # log_callback disabled - logs only go to terminal now
             )
             
             # 执行批量处理，使用预先获取的参数值
@@ -474,7 +497,8 @@ class BatchFluoMeasurementApp:
                 output_folder=self.processing_params['output_folder'],
                 roi=self.processing_params['roi'],
                 offset_correction=self.processing_params['offset_correction'],
-                enable_offset_optimization=self.processing_params['enable_offset_optimization']
+                enable_offset_optimization=self.processing_params['enable_offset_optimization'],
+                search_range=self.processing_params['search_range']
             )
             
             if result:
@@ -555,8 +579,8 @@ class BatchFluoMeasurementApp:
             )
             if result:
                 self.stop_processing()
-                # 等待处理线程停止
-                self.root.after(500, self.on_close)
+                # 直接关闭窗口 (处理线程会自然终止)
+                self.root.destroy()
             # 如果用户选择"否"，不关闭窗口
         else:
             self.root.destroy()
@@ -581,7 +605,8 @@ class BatchFluoMeasurementApp:
         """更新当前步骤显示（线程安全）"""
         self.current_step = step_text
         try:
-            self.root.after_idle(lambda: self.step_var.set(step_text))
+            # 使用after(0)代替after_idle以实现立即更新
+            self.root.after(0, lambda: self.step_var.set(step_text))
         except RuntimeError as e:
             if "main thread is not in main loop" in str(e):
                 # 主线程已退出，跳过GUI更新
@@ -590,17 +615,23 @@ class BatchFluoMeasurementApp:
                 raise
         
     def update_progress(self, current, total, message=""):
-        """更新进度显示（线程安全）"""
+        """更新进度显示（线程安全，支持浮点数百分比）"""
         if total > 0:
             progress = (current / total) * 100
-            progress_text = f"{current}/{total} ({progress:.1f}%)"
+            progress_text = f"{progress:.1f}%"
             
             def update_gui():
                 self.progress_var.set(progress)
                 self.progress_text_var.set(progress_text)
+                # 强制立即刷新GUI
+                try:
+                    self.root.update_idletasks()
+                except:
+                    pass
             
             try:
-                self.root.after_idle(update_gui)
+                # 使用after(0)实现立即更新
+                self.root.after(0, update_gui)
             except RuntimeError as e:
                 if "main thread is not in main loop" in str(e):
                     # 主线程已退出，跳过GUI更新
@@ -676,7 +707,16 @@ class BatchFluoMeasurementApp:
             'fluorescence_folder': self.fluorescence_var.get(),
             'darkfield_paths': self.darkfield_var.get(),
             'output_folder': self.output_var.get(),
-            'roi': self.roi
+            'roi': self.roi,
+            'offset_correction': {
+                'enabled': self.enable_offset_var.get(),
+                'x_offset': self.x_offset_var.get(),
+                'y_offset': self.y_offset_var.get()
+            },
+            'offset_optimization': {
+                'enabled': self.enable_offset_optimization_var.get(),
+                'search_range': self.search_range_var.get()
+            }
         }
         
         self.config_manager.save_config(config)
@@ -699,6 +739,19 @@ class BatchFluoMeasurementApp:
                 self.roi_info_var.set(f"已选择: ({x}, {y}) 尺寸: {w}×{h}")
             else:
                 self.roi_info_var.set("未选择 (将检测整个图像)")
+            
+            # 加载偏移校正配置
+            offset_config = config.get('offset_correction', {})
+            self.enable_offset_var.set(offset_config.get('enabled', True))
+            self.x_offset_var.set(offset_config.get('x_offset', '0'))
+            self.y_offset_var.set(offset_config.get('y_offset', '16'))
+            self.on_offset_toggle()  # 更新UI状态
+            
+            # 加载偏移优化配置
+            optimization_config = config.get('offset_optimization', {})
+            self.enable_offset_optimization_var.set(optimization_config.get('enabled', False))
+            self.search_range_var.set(optimization_config.get('search_range', '5'))
+            self.on_optimization_toggle()  # 更新UI状态
             
             self.log_message("已加载保存的配置")
             
