@@ -1,10 +1,10 @@
 {
-    "gaussian_sigma": 1.0,
+    "gaussian_sigma": 0.2,
     "threshold_method": "otsu",
     "min_area": 50,
     "closing_radius": 8,
     "opening_radius": 2,
     "smoothing_radius": 2,
-    "saved_time": "2025-10-09T16:00:10.609781",
+    "saved_time": "2025-10-10T12:02:17.263232",
     "description": "动态预览应用的参数"
 }

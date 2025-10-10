@@ -96,7 +96,7 @@ class CellDetectionConfig:
         try:
             # 验证高斯模糊参数
             sigma = float(params.get("gaussian_sigma", 1.5))
-            if 0.5 <= sigma <= 3.0:
+            if 0.1 <= sigma <= 3.0:
                 validated["gaussian_sigma"] = sigma
                 
             # 验证阈值方法

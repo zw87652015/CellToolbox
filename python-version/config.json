@@ -1,13 +1,13 @@
 {
-    "brightfield_path": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/1/BF/BF.tif",
-    "fluorescence_folder": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/1/Fluo",
+    "brightfield_path": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/2/BF/BF.tif",
+    "fluorescence_folder": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/2/Fluo",
     "darkfield_paths": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/Dark/tif/Dark1.tif;E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/Dark/tif/Dark2.tif;E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/Dark/tif/Dark3.tif;E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/Dark/tif/Dark4.tif;E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/Dark/tif/Dark5.tif",
-    "output_folder": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/1/Output",
+    "output_folder": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/2/Output/Demo",
     "roi": [
-        1746,
-        1141,
-        50,
-        45
+        1960,
+        1659,
+        78,
+        74
     ],
     "offset_correction": {
         "enabled": true,
@@ -18,5 +18,5 @@
         "enabled": true,
         "search_range": "10"
     },
-    "last_saved": "2025-10-09T15:52:10.104547"
+    "last_saved": "2025-10-10T12:56:03.230216"
 }

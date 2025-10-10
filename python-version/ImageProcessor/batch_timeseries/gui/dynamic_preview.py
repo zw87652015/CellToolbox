@@ -209,8 +209,8 @@ class DynamicPreviewWindow:
             # 验证和获取当前参数
             try:
                 gaussian_sigma = float(self.gaussian_sigma.get())
-                if not (0.5 <= gaussian_sigma <= 3.0):
-                    raise ValueError("高斯σ必须在0.5-3.0范围内")
+                if not (0.1 <= gaussian_sigma <= 3.0):
+                    raise ValueError("高斯σ必须在0.1-3.0范围内")
                     
                 min_area = int(self.min_area.get())
                 if min_area < 1:

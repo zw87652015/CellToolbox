@@ -1,0 +1,32 @@
+2025-10-09 17:19:22,187 - __main__ - INFO - ============================================================
+2025-10-09 17:19:22,187 - __main__ - INFO - 灰度TIFF像素放大工具启动
+2025-10-09 17:19:22,187 - __main__ - INFO - ============================================================
+2025-10-09 17:19:22,269 - __main__ - ERROR - 应用启动失败: 'MainWindow' object has no attribute 'control_panel'
+Traceback (most recent call last):
+  File "e:\Documents\Codes\Matlab\CellToolbox\python-version\ImageProcessor\SharpImageConverter\main.py", line 81, in main
+    window = MainWindow()
+             ^^^^^^^^^^^^
+  File "e:\Documents\Codes\Matlab\CellToolbox\python-version\ImageProcessor\SharpImageConverter\gui\main_window.py", line 52, in __init__
+    self.init_ui()
+  File "e:\Documents\Codes\Matlab\CellToolbox\python-version\ImageProcessor\SharpImageConverter\gui\main_window.py", line 63, in init_ui
+    self.create_menu_bar()
+  File "e:\Documents\Codes\Matlab\CellToolbox\python-version\ImageProcessor\SharpImageConverter\gui\main_window.py", line 113, in create_menu_bar
+    open_action.triggered.connect(self.control_panel.browse_file)
+                                  ^^^^^^^^^^^^^^^^^^
+AttributeError: 'MainWindow' object has no attribute 'control_panel'
+2025-10-09 17:20:15,719 - __main__ - INFO - ============================================================
+2025-10-09 17:20:15,719 - __main__ - INFO - 灰度TIFF像素放大工具启动
+2025-10-09 17:20:15,719 - __main__ - INFO - ============================================================
+2025-10-09 17:20:16,140 - gui.main_window - INFO - 应用启动
+2025-10-09 17:20:27,056 - core.image_processor - INFO - 成功加载图像: E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/2/DSC02930-RAWcomposite.tif
+2025-10-09 17:20:27,056 - core.image_processor - INFO - 尺寸: (57, 52), 位深度: 16位
+2025-10-09 17:20:27,058 - gui.image_viewer - INFO - 图像已加载到查看器: (52, 57)
+2025-10-09 17:20:27,976 - gui.controls - INFO - 选择文件: E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/2/DSC02930-RAWcomposite.tif
+2025-10-09 17:20:31,550 - core.image_processor - INFO - 开始放大图像: 57x52 -> 114x104 (倍数: 2x)
+2025-10-09 17:20:31,550 - core.image_processor - INFO - 图像放大完成
+2025-10-09 17:20:31,552 - gui.image_viewer - INFO - 图像已加载到查看器: (104, 114)
+2025-10-09 17:20:39,001 - core.image_processor - INFO - 开始放大图像: 57x52 -> 285x260 (倍数: 5x)
+2025-10-09 17:20:39,002 - core.image_processor - INFO - 图像放大完成
+2025-10-09 17:20:39,003 - gui.image_viewer - INFO - 图像已加载到查看器: (260, 285)
+2025-10-09 17:20:55,701 - core.image_processor - ERROR - 保存图像失败: not enough image data
+2025-10-09 17:21:02,988 - gui.main_window - INFO - 应用关闭

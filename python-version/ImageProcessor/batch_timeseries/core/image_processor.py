@@ -517,7 +517,7 @@ class ImageProcessor:
             summary = (
                 f"偏移优化完成总结 (并行处理):\n"
                 f"  - 搜索位置数: {total_searches}\n"
-                f"  - 并行线程数: {max_workers}\n"
+                f"  - 并行线程数: {self._max_workers}\n"
                 f"  - 基础偏移: ({base_x:+d}, {base_y:+d})\n"
                 f"  - 最佳偏移: ({final_x:+d}, {final_y:+d})\n"
                 f"  - 偏移改进: ({improvement_x:+d}, {improvement_y:+d})\n"

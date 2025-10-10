@@ -205,7 +205,7 @@ class ConfigManager:
             template['_description'] = {
                 'version': '配置文件版本',
                 'processing_parameters': {
-                    'gaussian_sigma': '高斯模糊参数 (0.5-3.0)',
+                    'gaussian_sigma': '高斯模糊参数 (0.1-3.0)',
                     'threshold_method': '阈值算法 (otsu/triangle)',
                     'min_area': '最小细胞面积 (像素)',
                     'closing_radius': '形态学关闭半径',
