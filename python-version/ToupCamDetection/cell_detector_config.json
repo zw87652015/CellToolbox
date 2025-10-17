@@ -14,5 +14,7 @@
     "min_solidity": 0.95,
     "min_extent": 0.65,
     "watershed_distance_threshold": 14,
-    "pattern_size_multiplier": 2.7
+    "pattern_size_multiplier": 3.0,
+    "trigger_cooldown": 2.0,
+    "verbose_mode": true
 }

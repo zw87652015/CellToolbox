@@ -42,7 +42,10 @@ except ImportError:
 class CellDetectorGPU:
     """GPU-accelerated cell detection class for processing images and detecting cells"""
     
-    def __init__(self):
+    def __init__(self, verbose=False):
+        # Verbose mode flag
+        self.verbose = verbose
+        
         # Initialize NVML for GPU monitoring if available
         self.handle = None
         if NVML_AVAILABLE and pynvml:
@@ -696,10 +699,10 @@ class CellDetectorGPU:
         # Store results
         self.detected_cells = detected_cells
         
-        # Calculate processing time
+        # Calculate processing time (silently - stats tracked internally)
         processing_time = time.time() - start_time
         gpu_utilization = self.get_gpu_utilization()
-        print(f"GPU detection time: {processing_time:.3f}s, GPU utilization: {gpu_utilization}%, Found {len(detected_cells)} cells")
+        # Detection stats are displayed in UI, no need to print
         
         if return_debug:
             # Create debug image showing the binary segmentation

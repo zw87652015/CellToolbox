@@ -151,12 +151,12 @@ class ToupCamCameraManager:
             ctx.frame_times.append(latency)
             ctx.last_frame_time = current_time
             
-            # Calculate FPS every 30 frames
+            # Calculate FPS every 30 frames (silently - displayed in UI)
             ctx.frame_count += 1
             if ctx.frame_count % 30 == 0:
                 elapsed = time.time() - ctx.start_time
                 fps = ctx.frame_count / elapsed
-                print(f"Current FPS: {fps:.2f}, Avg Latency: {sum(ctx.frame_times)/len(ctx.frame_times):.2f}ms")
+                # FPS is displayed in UI, no need to print
                 ctx.frame_count = 0
                 ctx.start_time = time.time()
                 ctx.frame_times = []

@@ -15,6 +15,15 @@ import os
 import cv2
 import numpy as np
 
+# DG2052 Signal Generator Control
+try:
+    import pyvisa
+    PYVISA_AVAILABLE = True
+except ImportError:
+    pyvisa = None
+    PYVISA_AVAILABLE = False
+    print("Warning: pyvisa not available. DG2052 trigger functionality disabled.")
+
 from toupcam_camera_manager import ToupCamCameraManager
 from cell_detector_gpu import CellDetectorGPU  # Use GPU version
 from aoi_manager import AOIManager
@@ -35,7 +44,7 @@ class ToupCameraLiveGPU:
         
         # Initialize components
         self.camera_manager = ToupCamCameraManager(camera_index=0, target_fps=120)  # Increased for higher detection rate
-        self.cell_detector = CellDetectorGPU()  # Use GPU version
+        self.cell_detector = CellDetectorGPU(verbose=False)  # Use GPU version, start with verbose=False
         self.cell_tracker = AdaptiveCellTracker(
             max_disappeared=0,  # Reduced from 15 to 5 frames for faster cleanup
             base_search_radius=50,
@@ -64,6 +73,25 @@ class ToupCameraLiveGPU:
         
         # Projection pattern size multiplier (0.1 to 3.0)
         self.pattern_size_multiplier = 1.0
+        
+        # DG2052 Signal Generator Control
+        self.dg2052 = None
+        self.dg2052_connected = False
+        self.rm = None  # PyVISA resource manager
+        
+        # Trigger control - track which cells have been triggered
+        self.triggered_cell_ids = set()  # Set of cell IDs that have already triggered
+        self.last_trigger_time = 0.0  # Timestamp of last trigger
+        self.TRIGGER_COOLDOWN = 1.0  # Minimum 1 second between triggers
+        self.TRIGGER_MIN_LIFETIME = 0.5  # Cell must be tracked for 500ms
+        
+        # Pulse status display
+        self.pulse_status = "Pulse off"  # Status text
+        self.pulse_color = (0, 255, 255)  # Yellow (BGR) for OFF
+        self.pulse_status_lock = threading.Lock()  # Thread-safe access
+        
+        # Verbose mode flag - controls terminal output
+        self.verbose_mode = False  # Set to False for quiet mode
         
         # Display settings - Will be set dynamically based on canvas size
         self.display_width = 800  # Initial fallback value
@@ -98,6 +126,15 @@ class ToupCameraLiveGPU:
         if hasattr(self, 'pattern_size_var'):
             self.pattern_size_var.set(self.pattern_size_multiplier)
             self.pattern_size_label.config(text=f"{self.pattern_size_multiplier:.1f}x")
+        
+        # Update UI with loaded trigger cooldown
+        if hasattr(self, 'trigger_gap_entry'):
+            self.trigger_gap_entry.delete(0, tk.END)
+            self.trigger_gap_entry.insert(0, f"{self.TRIGGER_COOLDOWN:.1f}")
+        
+        # Update UI with loaded verbose mode
+        if hasattr(self, 'verbose_var'):
+            self.verbose_var.set(self.verbose_mode)
         
         # Initialize AOI manager with video canvas
         self.aoi_manager = AOIManager(self.video_canvas)
@@ -156,6 +193,8 @@ class ToupCameraLiveGPU:
                 'min_extent': self.cell_detector.min_extent,
                 'watershed_distance_threshold': self.cell_detector.watershed_distance_threshold,
                 'pattern_size_multiplier': self.pattern_size_multiplier,
+                'trigger_cooldown': self.TRIGGER_COOLDOWN,
+                'verbose_mode': self.verbose_mode,
             }
             
             with open(CONFIG_FILE, 'w') as f:
@@ -194,6 +233,14 @@ class ToupCameraLiveGPU:
                 
                 # Load pattern size multiplier
                 self.pattern_size_multiplier = config.get('pattern_size_multiplier', 1.0)
+                
+                # Load trigger cooldown
+                self.TRIGGER_COOLDOWN = config.get('trigger_cooldown', 1.0)
+                
+                # Load verbose mode
+                self.verbose_mode = config.get('verbose_mode', False)
+                # Update cell detector verbose flag
+                self.cell_detector.verbose = self.verbose_mode
                 
                 print(f"Parameters loaded from {CONFIG_FILE}")
             else:
@@ -383,6 +430,58 @@ class ToupCameraLiveGPU:
                                       bg='gray20', fg='white', highlightthickness=0)
         pattern_size_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
+        # DG2052 Signal Generator Controls
+        dg2052_frame = tk.LabelFrame(self.control_panel, text="DG2052 Signal Generator", 
+                                    bg='gray20', fg='white')
+        dg2052_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Connection status label
+        self.dg2052_status_label = tk.Label(dg2052_frame, text="Status: Disconnected", 
+                                           bg='gray20', fg='red', font=('Arial', 9))
+        self.dg2052_status_label.pack(pady=2)
+        
+        # Connect/Disconnect buttons
+        dg2052_button_frame = tk.Frame(dg2052_frame, bg='gray20')
+        dg2052_button_frame.pack(fill=tk.X, pady=2)
+        
+        self.dg2052_connect_btn = tk.Button(dg2052_button_frame, text="Connect", 
+                                           command=self.connect_dg2052,
+                                           bg='green', fg='white', font=('Arial', 9))
+        self.dg2052_connect_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 2))
+        
+        self.dg2052_disconnect_btn = tk.Button(dg2052_button_frame, text="Disconnect", 
+                                              command=self.disconnect_dg2052,
+                                              bg='red', fg='white', font=('Arial', 9),
+                                              state='disabled')
+        self.dg2052_disconnect_btn.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(2, 5))
+        
+        # Pulse status label
+        self.dg2052_pulse_status_label = tk.Label(dg2052_frame, text="Pulse off", 
+                                                 bg='gray20', fg='yellow', font=('Arial', 11, 'bold'))
+        self.dg2052_pulse_status_label.pack(pady=5)
+        
+        # Trigger statistics
+        self.dg2052_trigger_label = tk.Label(dg2052_frame, text="Triggers: 0", 
+                                            bg='gray20', fg='yellow', font=('Arial', 9))
+        self.dg2052_trigger_label.pack(pady=2)
+        self.trigger_count = 0  # Track number of triggers
+        
+        # Trigger gap control
+        trigger_gap_frame = tk.Frame(dg2052_frame, bg='gray20')
+        trigger_gap_frame.pack(fill=tk.X, pady=5, padx=5)
+        
+        tk.Label(trigger_gap_frame, text="Trigger Gap:", 
+                bg='gray20', fg='white', font=('Arial', 9)).pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.trigger_gap_entry = tk.Entry(trigger_gap_frame, width=8, font=('Arial', 9))
+        self.trigger_gap_entry.pack(side=tk.LEFT, padx=(0, 5))
+        self.trigger_gap_entry.insert(0, f"{self.TRIGGER_COOLDOWN:.1f}")
+        self.trigger_gap_entry.bind('<Return>', self.update_trigger_gap)
+        self.trigger_gap_entry.bind('<FocusOut>', self.update_trigger_gap)
+        
+        tk.Label(trigger_gap_frame, text="s", 
+                bg='gray20', fg='white', font=('Arial', 9)).pack(side=tk.LEFT)
+        
         # Performance monitoring
         perf_frame = tk.LabelFrame(self.control_panel, text="Performance", 
                                  bg='gray20', fg='white')
@@ -394,6 +493,14 @@ class ToupCameraLiveGPU:
         self.detection_count_label = tk.Label(perf_frame, text="Cells: 0", 
                                             bg='gray20', fg='white')
         self.detection_count_label.pack(pady=2)
+        
+        # Verbose mode toggle
+        self.verbose_var = tk.BooleanVar(value=self.verbose_mode)
+        verbose_check = tk.Checkbutton(perf_frame, text="Verbose Output", 
+                                      variable=self.verbose_var,
+                                      command=self.toggle_verbose_mode,
+                                      bg='gray20', fg='white', selectcolor='gray30')
+        verbose_check.pack(pady=2)
         
         # GPU Performance Parameters
         gpu_frame = tk.LabelFrame(self.control_panel, text="GPU Parameters", 
@@ -738,21 +845,14 @@ class ToupCameraLiveGPU:
                         self.root.after(0, lambda: self.tracking_stats_label.config(
                             text=f"Active: {active_tracks} | Missing: {disappeared_tracks} | Frame: {stats['frame_number']}"))
                         
-                        # Update fullscreen canvas with cell positions
+                        # Update fullscreen canvas with cell positions (high priority)
                         if self.fullscreen_canvas_open:
-                            self.root.after(0, lambda: self.update_fullscreen_canvas_cells(self.tracked_cells))
+                            self.root.after_idle(lambda: self.update_fullscreen_canvas_cells(self.tracked_cells))
                         
-                        # Debug output
-                        if len(detected_cells) > 0:
-                            print(f"GPU Detection: Found {len(detected_cells)} cells, {active_tracks} active tracks")
-                            # Print first few ACTIVE tracked cells for debugging (only those currently detected)
-                            active_tracks_debug = [(cell_id, track_info) for cell_id, track_info in self.tracked_cells.items() 
-                                                  if track_info['disappeared_count'] == 0]
-                            for i, (cell_id, track_info) in enumerate(active_tracks_debug[:3]):
-                                centroid = track_info['centroid']
-                                confidence = track_info['confidence']
-                                velocity = track_info.get('velocity', (0, 0))
-                                print(f"  Active Track {cell_id}: pos=({centroid[0]:.1f},{centroid[1]:.1f}) conf={confidence:.2f} vel=({velocity[0]:.1f},{velocity[1]:.1f})")
+                        # Check and trigger DG2052 if conditions are met
+                        self.check_and_trigger_cells()
+                        
+                        # Detection stats displayed in UI only
                     else:
                         # Store detection results without tracking
                         self.cell_detector.detected_cells = detected_cells
@@ -761,9 +861,7 @@ class ToupCameraLiveGPU:
                         self.root.after(0, lambda: self.detection_count_label.config(
                             text=f"Cells: {len(detected_cells)}"))
                         
-                        # Debug output
-                        if len(detected_cells) > 0:
-                            print(f"GPU Detection: Found {len(detected_cells)} cells")
+                        # Detection stats displayed in UI only
                         
                 except Exception as e:
                     print(f"Detection error: {e}")
@@ -1091,6 +1189,44 @@ class ToupCameraLiveGPU:
         except Exception as e:
             print(f"Error in draw_tracked_cells: {e}")
     
+    def draw_pulse_status_overlay(self, display_frame, display_offset_x, display_offset_y, actual_display_width, actual_display_height):
+        """Draw pulse status text overlay at top of ROI or frame"""
+        try:
+            # Get current pulse status (thread-safe)
+            with self.pulse_status_lock:
+                status_text = self.pulse_status
+                status_color = self.pulse_color
+            
+            # Simple positioning - always at top left of visible video area
+            # If ROI exists, the text will be drawn at the top of the ROI area on screen
+            text_x = display_offset_x + 10
+            text_y = display_offset_y + 30
+            
+            # Draw text with background for better visibility
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1.0
+            font_thickness = 2
+            
+            # Get text size
+            (text_width, text_height), baseline = cv2.getTextSize(
+                status_text, font, font_scale, font_thickness)
+            
+            # Draw black background rectangle
+            padding = 5
+            cv2.rectangle(display_frame,
+                         (text_x - padding, text_y - text_height - padding),
+                         (text_x + text_width + padding, text_y + baseline + padding),
+                         (0, 0, 0), -1)
+            
+            # Draw text
+            cv2.putText(display_frame, status_text,
+                       (text_x, text_y),
+                       font, font_scale, status_color, font_thickness,
+                       cv2.LINE_AA)
+            
+        except Exception as e:
+            print(f"Error drawing pulse status overlay: {e}")
+    
     def update_display(self, display_frame):
         """Update the video display on Canvas"""
         try:
@@ -1175,6 +1311,215 @@ class ToupCameraLiveGPU:
         self.pattern_size_multiplier = float(value)
         self.pattern_size_label.config(text=f"{self.pattern_size_multiplier:.1f}x")
         print(f"Pattern size multiplier: {self.pattern_size_multiplier:.1f}x")
+    
+    def connect_dg2052(self):
+        """Connect to DG2052 signal generator"""
+        if not PYVISA_AVAILABLE:
+            print("ERROR: pyvisa not installed. Run: pip install pyvisa")
+            self.dg2052_status_label.config(text="Status: PyVISA Missing", fg='red')
+            return
+            
+        if self.dg2052_connected:
+            print("DG2052 already connected")
+            return
+        
+        try:
+            print("Connecting to DG2052...")
+            self.rm = pyvisa.ResourceManager()
+            resources = self.rm.list_resources()
+            print(f"Available resources: {resources}")
+            
+            # Try common connection strings
+            connection_strings = [
+                'USB0::0x1AB1::0x0644::DG2P232400656::0::INSTR',
+                'USB0::0x1AB1::0x0644::DG2P232400656::INSTR',
+            ]
+            
+            # Add any USB resources found
+            usb_resources = [r for r in resources if 'USB' in r.upper()]
+            connection_strings.extend(usb_resources)
+            
+            connected = False
+            for conn_str in connection_strings:
+                try:
+                    print(f"Trying: {conn_str}")
+                    self.dg2052 = self.rm.open_resource(conn_str)
+                    self.dg2052.timeout = 5000
+                    idn = self.dg2052.query('*IDN?')
+                    print(f"Connected: {idn.strip()}")
+                    connected = True
+                    break
+                except Exception as e:
+                    if self.dg2052:
+                        try:
+                            self.dg2052.close()
+                        except:
+                            pass
+                        self.dg2052 = None
+                    continue
+            
+            if connected:
+                self.dg2052_connected = True
+                self.dg2052_connect_btn.config(state='disabled')
+                self.dg2052_disconnect_btn.config(state='normal')
+                self.dg2052_status_label.config(text="Status: Connected", fg='green')
+                print("DG2052 connected successfully")
+            else:
+                raise Exception("Could not connect to DG2052")
+                
+        except Exception as e:
+            print(f"Failed to connect to DG2052: {e}")
+            self.dg2052_status_label.config(text="Status: Connection Failed", fg='red')
+            self.dg2052_connected = False
+    
+    def disconnect_dg2052(self):
+        """Disconnect from DG2052 signal generator"""
+        try:
+            if self.dg2052_connected and self.dg2052:
+                # Turn off output before disconnecting
+                try:
+                    self.dg2052.write(':OUTP1 OFF')
+                except:
+                    pass
+                
+                self.dg2052.close()
+                self.dg2052 = None
+                self.dg2052_connected = False
+                
+                self.dg2052_connect_btn.config(state='normal')
+                self.dg2052_disconnect_btn.config(state='disabled')
+                self.dg2052_status_label.config(text="Status: Disconnected", fg='red')
+                print("DG2052 disconnected")
+        except Exception as e:
+            print(f"Error disconnecting DG2052: {e}")
+    
+    def update_trigger_gap(self, event=None):
+        """Update trigger gap (cooldown) value with validation"""
+        try:
+            value = float(self.trigger_gap_entry.get())
+            if value < 0:
+                print("Invalid trigger gap: must be >= 0. Resetting to 1.0s")
+                value = 1.0
+                self.trigger_gap_entry.delete(0, tk.END)
+                self.trigger_gap_entry.insert(0, f"{value:.1f}")
+            elif value > 60:
+                print("Invalid trigger gap: maximum 60s. Setting to 60.0s")
+                value = 60.0
+                self.trigger_gap_entry.delete(0, tk.END)
+                self.trigger_gap_entry.insert(0, f"{value:.1f}")
+            
+            # Update the cooldown value
+            self.TRIGGER_COOLDOWN = value
+            print(f"Trigger gap updated to {value:.1f}s")
+            
+            # Format the entry
+            self.trigger_gap_entry.delete(0, tk.END)
+            self.trigger_gap_entry.insert(0, f"{value:.1f}")
+            
+        except ValueError:
+            print("Invalid trigger gap value. Resetting to 1.0s")
+            self.TRIGGER_COOLDOWN = 1.0
+            self.trigger_gap_entry.delete(0, tk.END)
+            self.trigger_gap_entry.insert(0, "1.0")
+    
+    def vprint(self, *args, **kwargs):
+        """Verbose print - only prints if verbose_mode is enabled"""
+        if self.verbose_mode:
+            print(*args, **kwargs)
+    
+    def toggle_verbose_mode(self):
+        """Toggle verbose mode on/off"""
+        self.verbose_mode = self.verbose_var.get()
+        # Update cell detector verbose flag
+        self.cell_detector.verbose = self.verbose_mode
+        status = "enabled" if self.verbose_mode else "disabled"
+        print(f"Verbose mode {status}")  # Always print this one
+    
+    def trigger_dg2052_pulse(self):
+        """
+        Execute DG2052 trigger pulse: Turn CH1 ON -> wait 200ms -> turn OFF
+        This runs in a separate thread to avoid blocking detection
+        """
+        if not self.dg2052_connected or not self.dg2052:
+            print("WARNING: DG2052 not connected, trigger skipped")
+            return
+        
+        def pulse_thread():
+            try:
+                # Turn ON
+                self.dg2052.write(':OUTP1 ON')
+                self.vprint("DG2052 CH1 ON")
+                
+                # Update status display - Pulse ON (Green)
+                self.root.after(0, lambda: self.dg2052_pulse_status_label.config(text="Pulse on", fg='green'))
+                
+                # Wait 200ms
+                time.sleep(0.2)
+                
+                # Turn OFF
+                self.dg2052.write(':OUTP1 OFF')
+                self.vprint("DG2052 CH1 OFF")
+                
+                # Update status display - Pulse OFF (Yellow)
+                self.root.after(0, lambda: self.dg2052_pulse_status_label.config(text="Pulse off", fg='yellow'))
+                
+                # Update trigger count
+                self.trigger_count += 1
+                self.root.after(0, lambda: self.dg2052_trigger_label.config(
+                    text=f"Triggers: {self.trigger_count}"))
+                
+            except Exception as e:
+                print(f"Error during DG2052 pulse: {e}")
+        
+        # Run in separate thread to not block detection
+        thread = threading.Thread(target=pulse_thread, daemon=True)
+        thread.start()
+    
+    def check_and_trigger_cells(self):
+        """
+        Check tracked cells and trigger if conditions are met:
+        - Cell tracked for >= 500ms
+        - Cell not previously triggered
+        - At least 1 second since last trigger (global cooldown)
+        """
+        if not self.dg2052_connected:
+            return  # Skip if not connected
+        
+        current_time = time.time()
+        
+        # Check global cooldown
+        if (current_time - self.last_trigger_time) < self.TRIGGER_COOLDOWN:
+            return  # Still in cooldown period
+        
+        # Find qualifying cells - access the actual TrackedCell objects from cell_tracker
+        qualifying_cells = []
+        for cell_id, cell_obj in self.cell_tracker.tracked_cells.items():
+            # Check if cell is actively tracked (not disappeared)
+            if cell_obj.disappeared_count > 0:
+                continue  # Skip disappeared cells
+            
+            # Calculate cell lifetime using creation_time from TrackedCell object
+            cell_lifetime = current_time - cell_obj.creation_time
+            
+            # Check if meets minimum lifetime and not already triggered
+            if cell_lifetime >= self.TRIGGER_MIN_LIFETIME and cell_id not in self.triggered_cell_ids:
+                qualifying_cells.append(cell_id)
+        
+        # If we have qualifying cells, trigger once
+        if qualifying_cells:
+            self.vprint(f"Triggering! Qualifying cells: {qualifying_cells}")
+            
+            # Execute trigger
+            self.trigger_dg2052_pulse()
+            
+            # Update last trigger time
+            self.last_trigger_time = current_time
+            
+            # Mark all qualifying cells as triggered
+            for cell_id in qualifying_cells:
+                self.triggered_cell_ids.add(cell_id)
+            
+            self.vprint(f"Trigger executed. Cooldown for 1 second.")
     
     def open_debug_window(self):
         """Open debug window"""
@@ -1410,6 +1755,9 @@ class ToupCameraLiveGPU:
                     
                     # print(f"  Drew white circle at ({screen_x:.1f}, {screen_y:.1f})")
             
+            # Force immediate canvas update for smooth animation
+            self.canvas_widget.update_idletasks()
+            
             # print(f"Canvas update complete: {active_count} active cells drawn")
         
         except Exception as e:
@@ -1467,4 +1815,16 @@ class ToupCameraLiveGPU:
         self.stop_camera()
         if self.debug_window:
             self.debug_window.destroy()
+        
+        # Disconnect DG2052 if connected
+        if self.dg2052_connected:
+            self.disconnect_dg2052()
+        
+        # Close PyVISA resource manager
+        if self.rm:
+            try:
+                self.rm.close()
+            except:
+                pass
+        
         self.root.destroy()
