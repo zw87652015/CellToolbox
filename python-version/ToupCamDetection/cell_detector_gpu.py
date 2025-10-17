@@ -13,13 +13,22 @@ import time
 try:
     import cupy as cp
     import cupyx.scipy.ndimage as cp_ndimage
-    GPU_AVAILABLE = True
-    print("GPU acceleration available with CuPy")
+    # Test if CuPy can actually use CUDA
+    try:
+        _ = cp.array([1, 2, 3])  # Test array creation
+        GPU_AVAILABLE = True
+        print("GPU acceleration available with CuPy")
+    except Exception as e:
+        print(f"CuPy installed but CUDA runtime not available: {e}")
+        import numpy as cp
+        import scipy.ndimage as cp_ndimage
+        GPU_AVAILABLE = False
+        print("Falling back to CPU (PyTorch will still use GPU)")
 except ImportError:
     import numpy as cp
     import scipy.ndimage as cp_ndimage
     GPU_AVAILABLE = False
-    print("GPU acceleration not available, falling back to CPU")
+    print("CuPy not available, using CPU for preprocessing (PyTorch will still use GPU)")
 
 # Try to import NVIDIA monitoring library
 try:

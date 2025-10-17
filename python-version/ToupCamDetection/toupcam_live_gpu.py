@@ -34,7 +34,7 @@ class ToupCameraLiveGPU:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Initialize components
-        self.camera_manager = ToupCamCameraManager(camera_index=0, target_fps=30)
+        self.camera_manager = ToupCamCameraManager(camera_index=0, target_fps=120)  # Increased for higher detection rate
         self.cell_detector = CellDetectorGPU()  # Use GPU version
         self.cell_tracker = AdaptiveCellTracker(
             max_disappeared=0,  # Reduced from 15 to 5 frames for faster cleanup
@@ -61,6 +61,9 @@ class ToupCameraLiveGPU:
         self.show_trajectories = False
         self.tracked_cells = {}
         self.show_predictions = False
+        
+        # Projection pattern size multiplier (0.1 to 3.0)
+        self.pattern_size_multiplier = 1.0
         
         # Display settings - Will be set dynamically based on canvas size
         self.display_width = 800  # Initial fallback value
@@ -90,6 +93,11 @@ class ToupCameraLiveGPU:
         
         # Setup UI
         self.setup_ui()
+        
+        # Update UI with loaded pattern size multiplier
+        if hasattr(self, 'pattern_size_var'):
+            self.pattern_size_var.set(self.pattern_size_multiplier)
+            self.pattern_size_label.config(text=f"{self.pattern_size_multiplier:.1f}x")
         
         # Initialize AOI manager with video canvas
         self.aoi_manager = AOIManager(self.video_canvas)
@@ -147,6 +155,7 @@ class ToupCameraLiveGPU:
                 'min_solidity': self.cell_detector.min_solidity,
                 'min_extent': self.cell_detector.min_extent,
                 'watershed_distance_threshold': self.cell_detector.watershed_distance_threshold,
+                'pattern_size_multiplier': self.pattern_size_multiplier,
             }
             
             with open(CONFIG_FILE, 'w') as f:
@@ -182,6 +191,9 @@ class ToupCameraLiveGPU:
                 # Also update min_area and max_area for backward compatibility
                 self.cell_detector.min_area = self.cell_detector.area_min
                 self.cell_detector.max_area = self.cell_detector.area_max
+                
+                # Load pattern size multiplier
+                self.pattern_size_multiplier = config.get('pattern_size_multiplier', 1.0)
                 
                 print(f"Parameters loaded from {CONFIG_FILE}")
             else:
@@ -353,6 +365,24 @@ class ToupCameraLiveGPU:
                                   bg='purple', fg='white', font=('Arial', 9))
         fullscreen_btn.pack(pady=5)
         
+        # Pattern size multiplier slider
+        pattern_size_frame = tk.Frame(tracking_frame, bg='gray20')
+        pattern_size_frame.pack(fill=tk.X, pady=2)
+        
+        tk.Label(pattern_size_frame, text="Pattern Size:", 
+                bg='gray20', fg='white', font=('Arial', 9)).pack(side=tk.LEFT, padx=5)
+        
+        self.pattern_size_var = tk.DoubleVar(value=1.0)
+        self.pattern_size_label = tk.Label(pattern_size_frame, text="1.0x", 
+                                          bg='gray20', fg='yellow', font=('Arial', 9), width=5)
+        self.pattern_size_label.pack(side=tk.RIGHT, padx=5)
+        
+        pattern_size_slider = tk.Scale(pattern_size_frame, from_=0.1, to=3.0, resolution=0.1,
+                                      orient=tk.HORIZONTAL, variable=self.pattern_size_var,
+                                      command=self.update_pattern_size,
+                                      bg='gray20', fg='white', highlightthickness=0)
+        pattern_size_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
         # Performance monitoring
         perf_frame = tk.LabelFrame(self.control_panel, text="Performance", 
                                  bg='gray20', fg='white')
@@ -390,7 +420,7 @@ class ToupCameraLiveGPU:
         
         tk.Label(gpu_frame, text="Max Area:", bg='gray20', fg='white').pack()
         self.area_max_var = tk.IntVar(value=self.cell_detector.area_max)
-        area_max_scale = tk.Scale(gpu_frame, from_=200, to=3000, 
+        area_max_scale = tk.Scale(gpu_frame, from_=200, to=5000, 
                                 variable=self.area_max_var, orient=tk.HORIZONTAL,
                                 command=self.update_area_max,
                                 bg='gray20', fg='white', highlightbackground='gray20')
@@ -750,9 +780,9 @@ class ToupCameraLiveGPU:
             # Dynamically adjust target FPS based on GPU headroom
             gpu_util = self.cell_detector.get_gpu_utilization()  # Requires GPU util monitor
             if gpu_util < 70:  # If GPU utilization <70%
-                target_fps = min(60, target_fps * 1.1)  # Increase FPS by 10%
+                target_fps = min(200, target_fps * 1.1)  # Increase FPS by 10%, cap at 200
             else:
-                target_fps = max(10, target_fps * 0.95)  # Reduce FPS if nearing limit
+                target_fps = max(30, target_fps * 0.95)  # Reduce FPS if nearing limit
     
     def render_loop(self):
         """Rendering loop - High FPS display (up to 120 FPS)"""
@@ -1140,6 +1170,12 @@ class ToupCameraLiveGPU:
         self.show_predictions = self.predictions_var.get()
         print(f"Predictions {'enabled' if self.show_predictions else 'disabled'}")
     
+    def update_pattern_size(self, value):
+        """Update pattern size multiplier"""
+        self.pattern_size_multiplier = float(value)
+        self.pattern_size_label.config(text=f"{self.pattern_size_multiplier:.1f}x")
+        print(f"Pattern size multiplier: {self.pattern_size_multiplier:.1f}x")
+    
     def open_debug_window(self):
         """Open debug window"""
         self.debug_window = tk.Toplevel(self.root)
@@ -1287,18 +1323,18 @@ class ToupCameraLiveGPU:
     def update_fullscreen_canvas_cells(self, tracked_cells):
         """Update cell positions on the fullscreen canvas"""
         if not self.fullscreen_canvas_open or not self.canvas_widget:
-            print(f"Canvas update skipped: canvas_open={self.fullscreen_canvas_open}, widget={self.canvas_widget is not None}")
+            # print(f"Canvas update skipped: canvas_open={self.fullscreen_canvas_open}, widget={self.canvas_widget is not None}")
             return
             
         if not hasattr(self, 'homography_matrix') or self.homography_matrix is None:
-            print("Canvas update skipped: homography_matrix not available")
+            # print("Canvas update skipped: homography_matrix not available")
             return
         
         try:
             # Clear previous cell markers
             self.canvas_widget.delete("cell_marker")
             
-            print(f"Updating canvas with {len(tracked_cells)} tracked cells")
+            # print(f"Updating canvas with {len(tracked_cells)} tracked cells")
             
             # Transform and draw each cell
             active_count = 0
@@ -1307,9 +1343,12 @@ class ToupCameraLiveGPU:
                 if hasattr(cell, 'disappeared_count'):
                     disappeared_count = cell.disappeared_count
                     centroid = cell.centroid
+                    # Get bbox from history if available
+                    bbox = cell.bbox_history[-1] if hasattr(cell, 'bbox_history') and len(cell.bbox_history) > 0 else None
                 elif isinstance(cell, dict):
                     disappeared_count = cell.get('disappeared_count', 0)
                     centroid = cell.get('centroid', (0, 0))
+                    bbox = cell.get('bbox', None)
                 else:
                     print(f"Unknown cell format for cell {cell_id}: {type(cell)}")
                     continue
@@ -1318,17 +1357,35 @@ class ToupCameraLiveGPU:
                     active_count += 1
                     # Get cell centroid
                     cx, cy = centroid
-                    print(f"Processing cell {cell_id}: centroid=({cx:.1f}, {cy:.1f})")
+                    # print(f"Processing cell {cell_id}: centroid=({cx:.1f}, {cy:.1f})")
+                    
+                    # Calculate cell radius from bbox
+                    cell_radius = 15  # Default radius
+                    if bbox is not None:
+                        # bbox format: (x, y, w, h)
+                        if len(bbox) == 4:
+                            bx, by, bw, bh = bbox
+                            # Estimate radius as average of half-width and half-height
+                            cell_radius = (bw + bh) / 4.0
                     
                     # Transform position using homography
                     cell_pt = np.array([[[cx, cy]]], dtype="float32")
                     transformed_pt = cv2.perspectiveTransform(cell_pt, self.homography_matrix)
                     screen_x, screen_y = transformed_pt[0][0]
                     
-                    print(f"  Transformed to screen: ({screen_x:.1f}, {screen_y:.1f})")
+                    # Calculate scale factor from homography for radius transformation
+                    # Transform a point slightly offset from center to get scale
+                    offset_pt = np.array([[[cx + cell_radius, cy]]], dtype="float32")
+                    transformed_offset = cv2.perspectiveTransform(offset_pt, self.homography_matrix)
+                    screen_offset_x, _ = transformed_offset[0][0]
+                    scale_factor = abs(screen_offset_x - screen_x) / cell_radius
                     
-                    # Calculate circle radius (proportional to FOV)
-                    circle_radius = 15  # Size for visibility
+                    # print(f"  Transformed to screen: ({screen_x:.1f}, {screen_y:.1f}), scale: {scale_factor:.2f}")
+                    
+                    # Calculate circle radius with multiplier
+                    base_radius = cell_radius * scale_factor
+                    circle_radius = int(base_radius * self.pattern_size_multiplier)
+                    circle_radius = max(3, circle_radius)  # Minimum 3 pixels for visibility
                     
                     # Draw filled white circle (disk)
                     self.canvas_widget.create_oval(
@@ -1351,9 +1408,9 @@ class ToupCameraLiveGPU:
                     #     tags="cell_marker"
                     # )
                     
-                    print(f"  Drew white circle at ({screen_x:.1f}, {screen_y:.1f})")
+                    # print(f"  Drew white circle at ({screen_x:.1f}, {screen_y:.1f})")
             
-            print(f"Canvas update complete: {active_count} active cells drawn")
+            # print(f"Canvas update complete: {active_count} active cells drawn")
         
         except Exception as e:
             print(f"Error updating fullscreen canvas cells: {e}")
