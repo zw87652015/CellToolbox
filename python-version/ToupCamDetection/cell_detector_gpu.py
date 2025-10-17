@@ -481,99 +481,61 @@ class CellDetectorGPU:
         else:
             gray_image = org.copy()
         
-        # Move to GPU for all processing
+        # Move to GPU for all processing - SIMPLIFIED for speed
         if self.gpu_available:
             gpu_gray = cp.asarray(gray_image)
             
-            # Fallback to CPU CLAHE - custom GPU implementation too slow
-            clahe = cv2.createCLAHE(clipLimit=self.clahe_clip_limit, 
-                                   tileGridSize=(self.clahe_tile_size, self.clahe_tile_size))
-            enhanced_image = clahe.apply(gray_image)
-            gpu_enhanced = cp.asarray(enhanced_image)
-            
-            # Gaussian denoising on GPU
-            gpu_double = gpu_enhanced.astype(cp.float32) / 255.0
-            gpu_denoised = self._gpu_gaussian_blur(gpu_double, 3, 2)
-            
-            # Binary thresholding on GPU
+            # Direct thresholding - skip CLAHE and denoising for speed
             try:
-                gpu_binary = self._gpu_threshold(gpu_enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                gpu_binary = self._gpu_threshold(gpu_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             except:
-                gpu_binary = self._gpu_threshold(gpu_enhanced, 127, 255, cv2.THRESH_BINARY_INV)
+                gpu_binary = self._gpu_threshold(gpu_gray, 127, 255, cv2.THRESH_BINARY_INV)
             
-            # Edge detection on GPU
-            gpu_8bit = (gpu_denoised * 255).astype(cp.uint8)
-            gpu_edges = self._gpu_canny(gpu_8bit, self.canny_low, self.canny_high)
-            
-            # Combine binary and edge detection on GPU
-            gpu_roi_seg = (gpu_binary > 0) | (gpu_edges > 0)
+            # Simple binary segmentation - skip edge detection for speed
+            gpu_roi_seg = gpu_binary > 0
         else:
-            # CPU fallback
-            clahe = cv2.createCLAHE(clipLimit=self.clahe_clip_limit, 
-                                   tileGridSize=(self.clahe_tile_size, self.clahe_tile_size))
-            enhanced_image = clahe.apply(gray_image)
-            
-            double_image = enhanced_image.astype(np.float32) / 255.0
-            denoised_image = self._gpu_gaussian_blur(double_image, 3, 2)
-            
+            # CPU fallback - SIMPLIFIED for speed
             try:
                 binary_image = self._gpu_threshold(gray_image, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             except:
                 binary_image = self._gpu_threshold(gray_image, 127, 255, cv2.THRESH_BINARY_INV)
             
-            img_8bit = (denoised_image * 255).astype(np.uint8)
-            edge_canny = self._gpu_canny(img_8bit, self.canny_low, self.canny_high)
-            
-            roi_seg = binary_image.astype(bool) | edge_canny.astype(bool)
+            roi_seg = binary_image.astype(bool)
         
-        # Conservative morphological operations
-        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-        kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        # Simplified morphological operations - single pass for speed
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         
         if self.gpu_available:
-            # Apply morphological operations on GPU
+            # Single morphological operation on GPU for speed
             gpu_roi_seg_uint8 = gpu_roi_seg.astype(cp.uint8)
-            gpu_roi_seg = self._gpu_morphology(gpu_roi_seg_uint8, cv2.MORPH_OPEN, kernel_small)
-            gpu_roi_seg = self._gpu_morphology(gpu_roi_seg, cv2.MORPH_CLOSE, kernel_medium, iterations=1)
+            gpu_roi_seg = self._gpu_morphology(gpu_roi_seg_uint8, cv2.MORPH_CLOSE, kernel_small)
             
             # Keep processing on GPU
             roi_seg_gpu = gpu_roi_seg > 0
         else:
-            # Remove noise first
+            # Simplified CPU path
             roi_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size)
-            
-            # GPU-accelerated morphological operations
             roi_seg_uint8 = roi_seg.astype(np.uint8)
-            roi_seg = self._gpu_morphology(roi_seg_uint8, cv2.MORPH_OPEN, kernel_small)
-            roi_seg = self._gpu_morphology(roi_seg, cv2.MORPH_CLOSE, kernel_medium, iterations=1)
+            roi_seg = self._gpu_morphology(roi_seg_uint8, cv2.MORPH_CLOSE, kernel_small)
             roi_seg = roi_seg > 0
         
         if self.gpu_available:
-            # Convert GPU results to CPU for remaining operations (CPU regionprops is faster)
+            # Convert GPU results to CPU for remaining operations
             roi_seg_cpu = roi_seg_gpu.get()
             
-            # Aggressive hole filling to create solid filled cells (not donuts)
-            # First pass: fill large holes
-            roi_seg = morphology.remove_small_holes(roi_seg_cpu.astype(bool), area_threshold=self.hole_fill_area)
-            # Second pass: binary fill to ensure completely filled cells
-            roi_seg = ndi.binary_fill_holes(roi_seg)
+            # Simplified hole filling - single pass for speed
+            roi_seg = ndi.binary_fill_holes(roi_seg_cpu.astype(bool))
             
-            # Final segmentation with stricter size filtering
-            final_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size * 2)
+            # Final segmentation - simpler filtering
+            final_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size)
             
-            # Label connected components (CPU is faster for this)
+            # Label connected components
             labeled_image = measure.label(final_seg)
             props = measure.regionprops(labeled_image)
         else:
-            # CPU fallback
-            # Aggressive hole filling to create solid filled cells (not donuts)
-            # First pass: fill large holes
-            roi_seg = morphology.remove_small_holes(roi_seg.astype(bool), area_threshold=self.hole_fill_area)
-            # Second pass: binary fill to ensure completely filled cells
-            roi_seg = ndi.binary_fill_holes(roi_seg)
-            
-            # Final segmentation with stricter size filtering
-            final_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size * 2)
+            # CPU fallback - simplified
+            roi_seg = ndi.binary_fill_holes(roi_seg.astype(bool))
+            final_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size)
             
             # Label connected components
             labeled_image = measure.label(final_seg)
@@ -642,59 +604,38 @@ class CellDetectorGPU:
         else:
             # Re-label after filtering without watershed
             labeled_image = measure.label(final_seg)
-        
-        # Get updated region properties after watershed segmentation
         props = measure.regionprops(labeled_image)
         
-        # Filter cells based on properties
+        # Quality filtering with solidity and extent
         detected_cells = []
         for prop in props:
+            # Calculate shape descriptors
             area = prop.area
-            perimeter = prop.perimeter
-            circularity = (perimeter * perimeter) / (4 * np.pi * area)
-            eccentricity = prop.eccentricity
+            bbox = prop.bbox
             solidity = prop.solidity  # area / convex_hull_area (rejects irregular noise)
             extent = prop.extent      # area / bbox_area (rejects sparse noise)
             
-            # Get bounding box for aspect ratio calculation
-            bbox = prop.bbox
-            height = bbox[2] - bbox[0]
-            width = bbox[3] - bbox[1]
-            
-            # Calculate aspect ratio condition
-            aspect_ratio_condition = (
-                (height > width and self.aspect_ratio_threshold * width > height) or
-                (width > height and self.aspect_ratio_threshold * height > width) or
-                (height == width)
-            )
-            
-            # Second filtering step - check area, perimeter, circularity, aspect ratio, AND quality metrics
-            # Quality metrics (solidity, extent) help reject noise that has similar size to real cells
-            if (self.area_min * 0.8 < area < self.area_max * 1.2 and 
-                self.min_perimeter * 0.7 < perimeter < self.max_perimeter * 1.3 and 
-                self.min_circularity * 0.8 < circularity < self.max_circularity * 1.2 and
-                aspect_ratio_condition and
-                solidity >= self.min_solidity and  # Reject irregular/fragmented noise
-                extent >= self.min_extent):         # Reject sparse noise
-                    
-                    # Calculate centroid (keep in AOI/cropped image space)
-                    y, x = prop.centroid
-                    
-                    # Convert bbox from (min_row, min_col, max_row, max_col) to (x1, y1, x2, y2)
-                    # Keep coordinates in AOI/cropped image space - don't adjust back to original
-                    cell_bbox = (bbox[1], bbox[0], bbox[3], bbox[2])
-                    
-                    detected_cells.append({
-                        'centroid': (x, y),
-                        'area': area,
-                        'bbox': cell_bbox,
-                        'perimeter': perimeter,
-                        'circularity': circularity,
-                        'eccentricity': eccentricity,
-                        'solidity': solidity,
-                        'extent': extent,
-                        'aoi_offset': (x1, y1) if aoi_coords else (0, 0)  # Store AOI offset for later use
-                    })
+            # Filter by area, solidity, and extent
+            if (self.area_min < area < self.area_max and
+                solidity >= self.min_solidity and
+                extent >= self.min_extent):
+                # Calculate centroid (keep in AOI/cropped image space)
+                y, x = prop.centroid
+                
+                # Convert bbox from (min_row, min_col, max_row, max_col) to (x1, y1, x2, y2)
+                cell_bbox = (bbox[1], bbox[0], bbox[3], bbox[2])
+                
+                detected_cells.append({
+                    'centroid': (x, y),
+                    'area': area,
+                    'bbox': cell_bbox,
+                    'perimeter': prop.perimeter,
+                    'circularity': (4 * np.pi * area) / (prop.perimeter ** 2) if prop.perimeter > 0 else 0,
+                    'eccentricity': prop.eccentricity,
+                    'solidity': solidity,
+                    'extent': extent,
+                    'aoi_offset': (x1, y1) if aoi_coords else (0, 0)
+                })
         
         # Store results
         self.detected_cells = detected_cells

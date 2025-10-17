@@ -502,140 +502,66 @@ class ToupCameraLiveGPU:
                                       bg='gray20', fg='white', selectcolor='gray30')
         verbose_check.pack(pady=2)
         
-        # GPU Performance Parameters
-        gpu_frame = tk.LabelFrame(self.control_panel, text="GPU Parameters", 
+        # Detection Parameters (Simplified)
+        detection_param_frame = tk.LabelFrame(self.control_panel, text="Detection Parameters", 
                                 bg='gray20', fg='white')
-        gpu_frame.pack(fill=tk.X, padx=10, pady=5)
+        detection_param_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        # CLAHE parameters
-        tk.Label(gpu_frame, text="CLAHE Clip Limit:", bg='gray20', fg='white').pack()
-        self.clahe_var = tk.DoubleVar(value=self.cell_detector.clahe_clip_limit)
-        clahe_scale = tk.Scale(gpu_frame, from_=1.0, to=5.0, resolution=0.1, 
-                             variable=self.clahe_var, orient=tk.HORIZONTAL,
-                             command=self.update_clahe_clip_limit,
-                             bg='gray20', fg='white', highlightbackground='gray20')
-        clahe_scale.pack(fill=tk.X, padx=5)
+        # Info label
+        tk.Label(detection_param_frame, text="Simplified for Speed", 
+                bg='gray20', fg='yellow', font=('Arial', 9, 'italic')).pack(pady=2)
         
-        # Area parameters
-        tk.Label(gpu_frame, text="Min Area:", bg='gray20', fg='white').pack()
+        # Area parameters - PRIMARY FILTER
+        tk.Label(detection_param_frame, text="Min Cell Area (pixels):", bg='gray20', fg='white').pack()
         self.area_min_var = tk.IntVar(value=self.cell_detector.area_min)
-        area_min_scale = tk.Scale(gpu_frame, from_=10, to=200, 
+        area_min_scale = tk.Scale(detection_param_frame, from_=10, to=500, 
                                 variable=self.area_min_var, orient=tk.HORIZONTAL,
                                 command=self.update_area_min,
                                 bg='gray20', fg='white', highlightbackground='gray20')
         area_min_scale.pack(fill=tk.X, padx=5)
         
-        tk.Label(gpu_frame, text="Max Area:", bg='gray20', fg='white').pack()
+        tk.Label(detection_param_frame, text="Max Cell Area (pixels):", bg='gray20', fg='white').pack()
         self.area_max_var = tk.IntVar(value=self.cell_detector.area_max)
-        area_max_scale = tk.Scale(gpu_frame, from_=200, to=5000, 
+        area_max_scale = tk.Scale(detection_param_frame, from_=200, to=5000, 
                                 variable=self.area_max_var, orient=tk.HORIZONTAL,
                                 command=self.update_area_max,
                                 bg='gray20', fg='white', highlightbackground='gray20')
         area_max_scale.pack(fill=tk.X, padx=5)
         
-        # Canny parameters
-        tk.Label(gpu_frame, text="Canny Low:", bg='gray20', fg='white').pack()
-        self.canny_low_var = tk.IntVar(value=self.cell_detector.canny_low)
-        canny_low_scale = tk.Scale(gpu_frame, from_=10, to=100, 
-                                 variable=self.canny_low_var, orient=tk.HORIZONTAL,
-                                 command=self.update_canny_low,
-                                 bg='gray20', fg='white', highlightbackground='gray20')
-        canny_low_scale.pack(fill=tk.X, padx=5)
-        
-        tk.Label(gpu_frame, text="Canny High:", bg='gray20', fg='white').pack()
-        self.canny_high_var = tk.IntVar(value=self.cell_detector.canny_high)
-        canny_high_scale = tk.Scale(gpu_frame, from_=50, to=200, 
-                                  variable=self.canny_high_var, orient=tk.HORIZONTAL,
-                                  command=self.update_canny_high,
-                                  bg='gray20', fg='white', highlightbackground='gray20')
-        canny_high_scale.pack(fill=tk.X, padx=5)
-        
-        # Perimeter parameters (for margin detection)
-        tk.Label(gpu_frame, text="Min Perimeter:", bg='gray20', fg='white').pack()
-        self.min_perimeter_var = tk.IntVar(value=self.cell_detector.min_perimeter)
-        min_perimeter_scale = tk.Scale(gpu_frame, from_=10, to=100, 
-                                      variable=self.min_perimeter_var, orient=tk.HORIZONTAL,
-                                      command=self.update_min_perimeter,
-                                      bg='gray20', fg='white', highlightbackground='gray20')
-        min_perimeter_scale.pack(fill=tk.X, padx=5)
-        
-        tk.Label(gpu_frame, text="Max Perimeter:", bg='gray20', fg='white').pack()
-        self.max_perimeter_var = tk.IntVar(value=self.cell_detector.max_perimeter)
-        max_perimeter_scale = tk.Scale(gpu_frame, from_=100, to=500, 
-                                      variable=self.max_perimeter_var, orient=tk.HORIZONTAL,
-                                      command=self.update_max_perimeter,
-                                      bg='gray20', fg='white', highlightbackground='gray20')
-        max_perimeter_scale.pack(fill=tk.X, padx=5)
-        
-        # Circularity parameters (for shape refinement)
-        tk.Label(gpu_frame, text="Min Circularity:", bg='gray20', fg='white').pack()
-        self.min_circularity_var = tk.DoubleVar(value=self.cell_detector.min_circularity)
-        min_circularity_scale = tk.Scale(gpu_frame, from_=0.1, to=1.0, resolution=0.1,
-                                        variable=self.min_circularity_var, orient=tk.HORIZONTAL,
-                                        command=self.update_min_circularity,
-                                        bg='gray20', fg='white', highlightbackground='gray20')
-        min_circularity_scale.pack(fill=tk.X, padx=5)
-        
-        tk.Label(gpu_frame, text="Max Circularity:", bg='gray20', fg='white').pack()
-        self.max_circularity_var = tk.DoubleVar(value=self.cell_detector.max_circularity)
-        max_circularity_scale = tk.Scale(gpu_frame, from_=1.0, to=5.0, resolution=0.1,
-                                        variable=self.max_circularity_var, orient=tk.HORIZONTAL,
-                                        command=self.update_max_circularity,
-                                        bg='gray20', fg='white', highlightbackground='gray20')
-        max_circularity_scale.pack(fill=tk.X, padx=5)
-        
         # Morphology parameters
-        tk.Label(gpu_frame, text="Min Object Size:", bg='gray20', fg='white').pack()
+        tk.Label(detection_param_frame, text="Min Object Size (noise filter):", bg='gray20', fg='white').pack()
         self.min_object_size_var = tk.IntVar(value=self.cell_detector.min_object_size)
-        min_object_size_scale = tk.Scale(gpu_frame, from_=5, to=100, 
+        min_object_size_scale = tk.Scale(detection_param_frame, from_=5, to=100, 
                                         variable=self.min_object_size_var, orient=tk.HORIZONTAL,
                                         command=self.update_min_object_size,
                                         bg='gray20', fg='white', highlightbackground='gray20')
         min_object_size_scale.pack(fill=tk.X, padx=5)
         
-        # Hole filling parameter (fixes donut-shaped cells)
-        tk.Label(gpu_frame, text="Hole Fill Area:", bg='gray20', fg='white').pack()
-        self.hole_fill_area_var = tk.IntVar(value=self.cell_detector.hole_fill_area)
-        hole_fill_area_scale = tk.Scale(gpu_frame, from_=0, to=1000, 
-                                       variable=self.hole_fill_area_var, orient=tk.HORIZONTAL,
-                                       command=self.update_hole_fill_area,
-                                       bg='gray20', fg='white', highlightbackground='gray20')
-        hole_fill_area_scale.pack(fill=tk.X, padx=5)
-        
-        # Quality filters (to reject noise)
-        tk.Label(gpu_frame, text="Min Solidity (Reject Noise):", bg='gray20', fg='white').pack()
-        self.min_solidity_var = tk.DoubleVar(value=self.cell_detector.min_solidity)
-        min_solidity_scale = tk.Scale(gpu_frame, from_=0.0, to=1.0, resolution=0.05,
-                                     variable=self.min_solidity_var, orient=tk.HORIZONTAL,
-                                     command=self.update_min_solidity,
-                                     bg='gray20', fg='white', highlightbackground='gray20')
-        min_solidity_scale.pack(fill=tk.X, padx=5)
-        
-        tk.Label(gpu_frame, text="Min Extent (Reject Noise):", bg='gray20', fg='white').pack()
-        self.min_extent_var = tk.DoubleVar(value=self.cell_detector.min_extent)
-        min_extent_scale = tk.Scale(gpu_frame, from_=0.0, to=1.0, resolution=0.05,
-                                   variable=self.min_extent_var, orient=tk.HORIZONTAL,
-                                   command=self.update_min_extent,
-                                   bg='gray20', fg='white', highlightbackground='gray20')
-        min_extent_scale.pack(fill=tk.X, padx=5)
-        
         # Watershed parameters
-        tk.Label(gpu_frame, text="Watershed Threshold:", bg='gray20', fg='white').pack()
+        tk.Label(detection_param_frame, text="Watershed Threshold (cell separation):", bg='gray20', fg='white').pack()
         self.watershed_threshold_var = tk.IntVar(value=self.cell_detector.watershed_distance_threshold)
-        watershed_threshold_scale = tk.Scale(gpu_frame, from_=1, to=30, 
+        watershed_threshold_scale = tk.Scale(detection_param_frame, from_=1, to=30, 
                                             variable=self.watershed_threshold_var, orient=tk.HORIZONTAL,
                                             command=self.update_watershed_threshold,
                                             bg='gray20', fg='white', highlightbackground='gray20')
         watershed_threshold_scale.pack(fill=tk.X, padx=5)
         
-        # CLAHE Tile Size
-        tk.Label(gpu_frame, text="CLAHE Tile Size:", bg='gray20', fg='white').pack()
-        self.clahe_tile_size_var = tk.IntVar(value=self.cell_detector.clahe_tile_size)
-        clahe_tile_size_scale = tk.Scale(gpu_frame, from_=4, to=16, 
-                                        variable=self.clahe_tile_size_var, orient=tk.HORIZONTAL,
-                                        command=self.update_clahe_tile_size,
-                                        bg='gray20', fg='white', highlightbackground='gray20')
-        clahe_tile_size_scale.pack(fill=tk.X, padx=5)
+        # Quality filters to reject noise
+        tk.Label(detection_param_frame, text="Min Solidity (Reject Noise):", bg='gray20', fg='white').pack()
+        self.min_solidity_var = tk.DoubleVar(value=self.cell_detector.min_solidity)
+        min_solidity_scale = tk.Scale(detection_param_frame, from_=0.0, to=1.0, resolution=0.05,
+                                     variable=self.min_solidity_var, orient=tk.HORIZONTAL,
+                                     command=self.update_min_solidity,
+                                     bg='gray20', fg='white', highlightbackground='gray20')
+        min_solidity_scale.pack(fill=tk.X, padx=5)
+        
+        tk.Label(detection_param_frame, text="Min Extent (Reject Noise):", bg='gray20', fg='white').pack()
+        self.min_extent_var = tk.DoubleVar(value=self.cell_detector.min_extent)
+        min_extent_scale = tk.Scale(detection_param_frame, from_=0.0, to=1.0, resolution=0.05,
+                                   variable=self.min_extent_var, orient=tk.HORIZONTAL,
+                                   command=self.update_min_extent,
+                                   bg='gray20', fg='white', highlightbackground='gray20')
+        min_extent_scale.pack(fill=tk.X, padx=5)
         
         # Exit Controls
         exit_frame = tk.LabelFrame(self.control_panel, text="Application", 
