@@ -7,8 +7,8 @@ class ShapesUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Manual Shapes Launcher")
-        self.root.geometry("400x300")
-        self.root.resizable(False, False)
+        self.root.geometry("400x600")
+        self.root.resizable(True, True)
         
         # Create frame for buttons
         self.button_frame = tk.Frame(root)
@@ -49,6 +49,16 @@ class ShapesUI:
         )
         self.ushape_button.pack(pady=10)
         
+        self.disk_button = tk.Button(
+            self.button_frame, 
+            text="Manual Disk", 
+            command=self.launch_disk,
+            width=20,
+            height=2,
+            font=("Arial", 12)
+        )
+        self.disk_button.pack(pady=10)
+        
         # Create exit button
         self.exit_button = tk.Button(
             self.root, 
@@ -76,6 +86,12 @@ class ShapesUI:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         ushape_script = os.path.join(script_dir, "Manual_u_shape.py")
         subprocess.Popen([sys.executable, ushape_script])
+    
+    def launch_disk(self):
+        """Launch the manual disk tool"""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        disk_script = os.path.join(script_dir, "Manual_disks.py")
+        subprocess.Popen([sys.executable, disk_script])
 
 def main():
     root = tk.Tk()

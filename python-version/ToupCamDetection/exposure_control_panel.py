@@ -41,8 +41,8 @@ class ExposureControlPanel:
         # Create new window
         self.window = tk.Toplevel(self.parent) if self.parent else tk.Tk()
         self.window.title("ToupCam Exposure Control")
-        self.window.geometry("400x300")
-        self.window.resizable(True, False)
+        self.window.geometry("400x500")
+        self.window.resizable(True, True)
         
         # Make window stay on top
         self.window.attributes('-topmost', True)

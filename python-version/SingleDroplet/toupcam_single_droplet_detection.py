@@ -1212,7 +1212,7 @@ class SingleDropletApp:
             with self.detection_lock:
                 detected_cells = self.detected_cells.copy() if self.detected_cells else []
             
-            print(f"Drawing {len(detected_cells)} cell circles")
+            # print(f"Drawing {len(detected_cells)} cell circles")  # Commented out to reduce log spam
             
             # Draw each detected cell as a filled circular disk
             for cell in detected_cells:
@@ -1231,7 +1231,7 @@ class SingleDropletApp:
                     # The camera view is rotated 180° to appear normal, and detection happens on this rotated view
                     # The calibration should have been done on the same rotated view, so coordinates should match
                     
-                    print(f"Using cell coordinates directly: {center}")
+                    # print(f"Using cell coordinates directly: {center}")  # Commented out to reduce log spam
                     
                     # Map camera coordinates using vector-based transformation
                     result = self.map_camera_to_screen(center[0], center[1])
@@ -1259,9 +1259,9 @@ class SingleDropletApp:
                         else:
                             scaled_radius = int(radius * 0.5)  # Default scaling
                         
-                        print(f"Vector mapping: Camera({center[0]}, {center[1]}) -> Screen({x_final}, {y_final})")
+                        # print(f"Vector mapping: Camera({center[0]}, {center[1]}) -> Screen({x_final}, {y_final})")  # Commented out to reduce log spam
                     else:
-                        print(f"Failed to map cell coordinates: ({center[0]}, {center[1]})")
+                        # print(f"Failed to map cell coordinates: ({center[0]}, {center[1]})")  # Commented out to reduce log spam
                         continue
                     
                     # Apply Pattern/Cell Size Ratio and calculate circle radius (ensure minimum visibility)
@@ -1276,9 +1276,9 @@ class SingleDropletApp:
                     pygame.draw.circle(self.pygame_screen, (255, 255, 255), (circle_x, circle_y), circle_radius)
                     
                     # Draw a small black center dot for precise positioning (visible on white background)
-                    pygame.draw.circle(self.pygame_screen, (0, 0, 0), (circle_x, circle_y), 2)
+                    pygame.draw.circle(self.pygame_screen, (0, 0, 255), (circle_x, circle_y), 1)
                     
-                    print(f"Drew cell circle at screen ({circle_x}, {circle_y}) with radius {circle_radius} (ratio: {self.pattern_cell_size_ratio:.2f})")
+                    # print(f"Drew cell circle at screen ({circle_x}, {circle_y}) with radius {circle_radius} (ratio: {self.pattern_cell_size_ratio:.2f})")  # Commented out to reduce log spam
                     
                 except Exception as e:
                     print(f"Error drawing individual cell circle: {str(e)}")
@@ -1790,7 +1790,7 @@ class SingleDropletApp:
     def update_pattern_size_ratio(self, value):
         """Update the Pattern/Cell Size Ratio parameter"""
         self.pattern_cell_size_ratio = value
-        print(f"Pattern/Cell Size Ratio updated to: {value:.2f}")
+        # print(f"Pattern/Cell Size Ratio updated to: {value:.2f}")  # Commented out to reduce log spam
     
     def on_ratio_enter(self, event):
         """Handle Enter key press in ratio input box"""
@@ -1813,12 +1813,12 @@ class SingleDropletApp:
             # Update the parameter and UI
             self.pattern_cell_size_ratio = value
             self.ratio_var.set(f"{value:.2f}")
-            print(f"Pattern/Cell Size Ratio updated to: {value:.2f}")
+            # print(f"Pattern/Cell Size Ratio updated to: {value:.2f}")  # Commented out to reduce log spam
             
         except ValueError:
             # Reset to current value if invalid input
             self.ratio_var.set(f"{self.pattern_cell_size_ratio:.2f}")
-            print(f"Invalid ratio input, reset to: {self.pattern_cell_size_ratio:.2f}")
+            # print(f"Invalid ratio input, reset to: {self.pattern_cell_size_ratio:.2f}")  # Commented out to reduce log spam
     
     def toggle_view_mode(self):
         """Toggle between camera and donut view modes"""
@@ -2156,10 +2156,10 @@ class SingleDropletApp:
                 # Store screen coordinates for pygame drawing
                 self.debug_dot_screen = (x_final, y_final)
                 
-                print(f"Debug mapping: Camera({camera_x:.1f}, {camera_y:.1f}) -> Screen({x_final}, {y_final})")
+                # print(f"Debug mapping: Camera({camera_x:.1f}, {camera_y:.1f}) -> Screen({x_final}, {y_final})")  # Commented out to reduce log spam
             else:
-                print(f"Failed to map camera coordinates: ({camera_x:.1f}, {camera_y:.1f})")
-                
+                # print(f"Failed to map camera coordinates: ({camera_x:.1f}, {camera_y:.1f})")  # Commented out to reduce log spam
+                pass
         except Exception as e:
             print(f"Error mapping debug dot: {str(e)}")
             import traceback
@@ -2210,7 +2210,7 @@ class SingleDropletApp:
                 # Draw the text
                 self.pygame_screen.blit(text_surface, text_rect)
                 
-                print(f"Debug dot drawn at pygame coordinates: ({x}, {y})")
+                # print(f"Debug dot drawn at pygame coordinates: ({x}, {y})")  # Commented out to reduce log spam
                 
         except Exception as e:
             print(f"Error drawing debug dot on pygame: {str(e)}")

@@ -1,0 +1,17 @@
+{
+    "clahe_clip_limit": 2.0,
+    "clahe_tile_size": 8,
+    "area_min": 150,
+    "area_max": 3000,
+    "canny_low": 50,
+    "canny_high": 150,
+    "min_perimeter": 30,
+    "max_perimeter": 376,
+    "min_circularity": 0.3,
+    "max_circularity": 3.0,
+    "min_object_size": 24,
+    "hole_fill_area": 500,
+    "min_solidity": 0.8,
+    "min_extent": 0.5,
+    "watershed_distance_threshold": 10
+}

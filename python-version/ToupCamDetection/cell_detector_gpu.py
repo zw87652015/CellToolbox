@@ -51,13 +51,17 @@ class CellDetectorGPU:
         self.eccentricity_threshold = 0.95  # More restrictive for rounder objects
         self.area_threshold_small = 100     # Lower threshold for first stage
         self.area_threshold_large = 300     # Reduced for more conservative filtering
-        self.area_min = 80           # Increased minimum area
-        self.area_max = 500          # Increased maximum area for larger cells
+        self.area_min = 150          # Increased minimum area
+        self.area_max = 1000         # Increased maximum area for larger cells
         self.min_perimeter = 30      # Reduced minimum perimeter
         self.max_perimeter = 200     # Reduced maximum perimeter
         self.min_circularity = 0.3   # More permissive circularity
         self.max_circularity = 3.0   # More restrictive maximum circularity
         self.aspect_ratio_threshold = 2.0  # More permissive aspect ratio
+        
+        # Shape quality filters (to reject noise)
+        self.min_solidity = 0.7      # Minimum solidity (area/convex_hull_area) - rejects irregular noise
+        self.min_extent = 0.3        # Minimum extent (area/bbox_area) - rejects sparse noise
         
         # Edge detection parameters (more conservative)
         self.canny_low = 50          # Higher low threshold
@@ -66,6 +70,7 @@ class CellDetectorGPU:
         
         # Morphology parameters
         self.final_min_size = 100
+        self.hole_fill_area = 500  # Area threshold for filling holes in cells
         
         # Watershed parameters
         self.use_watershed = True
@@ -139,7 +144,12 @@ class CellDetectorGPU:
                     result[:, :, i] = cp_ndimage.convolve(gpu_image[:, :, i], kernel, mode='reflect')
             return result
         else:
-            return cv2.GaussianBlur(image, kernel_size, sigma)
+            # Convert kernel_size to tuple if it's an integer
+            if isinstance(kernel_size, int):
+                ksize = (kernel_size, kernel_size)
+            else:
+                ksize = kernel_size
+            return cv2.GaussianBlur(image, ksize, sigma)
             
     def _create_gaussian_kernel(self, size, sigma):
         """Create Gaussian kernel on GPU"""
@@ -448,7 +458,7 @@ class CellDetectorGPU:
             x1, y1, x2, y2 = aoi_coords
             x1, y1, x2, y2 = max(0, x1), max(0, y1), min(org.shape[1], x2), min(org.shape[0], y2)
             if x2 <= x1 or y2 <= y1:
-                return [], None if return_debug else []
+                return ([], None) if return_debug else []
             org = org[y1:y2, x1:x2]
         else:
             x1, y1 = 0, 0
@@ -530,8 +540,11 @@ class CellDetectorGPU:
             # Convert GPU results to CPU for remaining operations (CPU regionprops is faster)
             roi_seg_cpu = roi_seg_gpu.get()
             
-            # Fill small holes only
-            roi_seg = morphology.remove_small_holes(roi_seg_cpu.astype(bool), area_threshold=50)
+            # Aggressive hole filling to create solid filled cells (not donuts)
+            # First pass: fill large holes
+            roi_seg = morphology.remove_small_holes(roi_seg_cpu.astype(bool), area_threshold=self.hole_fill_area)
+            # Second pass: binary fill to ensure completely filled cells
+            roi_seg = ndi.binary_fill_holes(roi_seg)
             
             # Final segmentation with stricter size filtering
             final_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size * 2)
@@ -541,8 +554,11 @@ class CellDetectorGPU:
             props = measure.regionprops(labeled_image)
         else:
             # CPU fallback
-            # Fill small holes only
-            roi_seg = morphology.remove_small_holes(roi_seg.astype(bool), area_threshold=50)
+            # Aggressive hole filling to create solid filled cells (not donuts)
+            # First pass: fill large holes
+            roi_seg = morphology.remove_small_holes(roi_seg.astype(bool), area_threshold=self.hole_fill_area)
+            # Second pass: binary fill to ensure completely filled cells
+            roi_seg = ndi.binary_fill_holes(roi_seg)
             
             # Final segmentation with stricter size filtering
             final_seg = morphology.remove_small_objects(roi_seg.astype(bool), min_size=self.min_object_size * 2)
@@ -625,6 +641,8 @@ class CellDetectorGPU:
             perimeter = prop.perimeter
             circularity = (perimeter * perimeter) / (4 * np.pi * area)
             eccentricity = prop.eccentricity
+            solidity = prop.solidity  # area / convex_hull_area (rejects irregular noise)
+            extent = prop.extent      # area / bbox_area (rejects sparse noise)
             
             # Get bounding box for aspect ratio calculation
             bbox = prop.bbox
@@ -638,12 +656,14 @@ class CellDetectorGPU:
                 (height == width)
             )
             
-            # Second filtering step - check area, perimeter, circularity and aspect ratio
-            # Slightly more permissive to improve recall
+            # Second filtering step - check area, perimeter, circularity, aspect ratio, AND quality metrics
+            # Quality metrics (solidity, extent) help reject noise that has similar size to real cells
             if (self.area_min * 0.8 < area < self.area_max * 1.2 and 
                 self.min_perimeter * 0.7 < perimeter < self.max_perimeter * 1.3 and 
                 self.min_circularity * 0.8 < circularity < self.max_circularity * 1.2 and
-                aspect_ratio_condition):
+                aspect_ratio_condition and
+                solidity >= self.min_solidity and  # Reject irregular/fragmented noise
+                extent >= self.min_extent):         # Reject sparse noise
                     
                     # Calculate centroid (keep in AOI/cropped image space)
                     y, x = prop.centroid
@@ -659,6 +679,8 @@ class CellDetectorGPU:
                         'perimeter': perimeter,
                         'circularity': circularity,
                         'eccentricity': eccentricity,
+                        'solidity': solidity,
+                        'extent': extent,
                         'aoi_offset': (x1, y1) if aoi_coords else (0, 0)  # Store AOI offset for later use
                     })
         

@@ -11,6 +11,7 @@ from PIL import Image, ImageTk
 import threading
 import time
 import json
+import os
 import cv2
 import numpy as np
 
@@ -19,6 +20,10 @@ from cell_detector_gpu import CellDetectorGPU  # Use GPU version
 from aoi_manager import AOIManager
 from adaptive_cell_tracker import AdaptiveCellTracker
 from exposure_control_panel import ExposureControlPanel
+
+# Configuration file path - save in the same folder as this script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(SCRIPT_DIR, "cell_detector_config.json")
 
 class ToupCameraLiveGPU:
     """Main application class for GPU-accelerated ToupCam live stream with cell detection"""
@@ -80,6 +85,9 @@ class ToupCameraLiveGPU:
         # Exposure control panel
         self.exposure_control_panel = None
         
+        # Load saved parameters before setting up UI
+        self.load_parameters()
+        
         # Setup UI
         self.setup_ui()
         
@@ -120,6 +128,67 @@ class ToupCameraLiveGPU:
             self.display_width = 800
             self.display_height = 600
     
+    def save_parameters(self):
+        """Save all detection parameters to JSON config file"""
+        try:
+            config = {
+                'clahe_clip_limit': self.cell_detector.clahe_clip_limit,
+                'clahe_tile_size': self.cell_detector.clahe_tile_size,
+                'area_min': self.cell_detector.area_min,
+                'area_max': self.cell_detector.area_max,
+                'canny_low': self.cell_detector.canny_low,
+                'canny_high': self.cell_detector.canny_high,
+                'min_perimeter': self.cell_detector.min_perimeter,
+                'max_perimeter': self.cell_detector.max_perimeter,
+                'min_circularity': self.cell_detector.min_circularity,
+                'max_circularity': self.cell_detector.max_circularity,
+                'min_object_size': self.cell_detector.min_object_size,
+                'hole_fill_area': self.cell_detector.hole_fill_area,
+                'min_solidity': self.cell_detector.min_solidity,
+                'min_extent': self.cell_detector.min_extent,
+                'watershed_distance_threshold': self.cell_detector.watershed_distance_threshold,
+            }
+            
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(config, f, indent=4)
+            print(f"Parameters saved to {CONFIG_FILE}")
+        except Exception as e:
+            print(f"Error saving parameters: {e}")
+    
+    def load_parameters(self):
+        """Load detection parameters from JSON config file"""
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                
+                # Apply loaded parameters to cell detector
+                self.cell_detector.clahe_clip_limit = config.get('clahe_clip_limit', self.cell_detector.clahe_clip_limit)
+                self.cell_detector.clahe_tile_size = config.get('clahe_tile_size', self.cell_detector.clahe_tile_size)
+                self.cell_detector.area_min = config.get('area_min', self.cell_detector.area_min)
+                self.cell_detector.area_max = config.get('area_max', self.cell_detector.area_max)
+                self.cell_detector.canny_low = config.get('canny_low', self.cell_detector.canny_low)
+                self.cell_detector.canny_high = config.get('canny_high', self.cell_detector.canny_high)
+                self.cell_detector.min_perimeter = config.get('min_perimeter', self.cell_detector.min_perimeter)
+                self.cell_detector.max_perimeter = config.get('max_perimeter', self.cell_detector.max_perimeter)
+                self.cell_detector.min_circularity = config.get('min_circularity', self.cell_detector.min_circularity)
+                self.cell_detector.max_circularity = config.get('max_circularity', self.cell_detector.max_circularity)
+                self.cell_detector.min_object_size = config.get('min_object_size', self.cell_detector.min_object_size)
+                self.cell_detector.hole_fill_area = config.get('hole_fill_area', self.cell_detector.hole_fill_area)
+                self.cell_detector.min_solidity = config.get('min_solidity', self.cell_detector.min_solidity)
+                self.cell_detector.min_extent = config.get('min_extent', self.cell_detector.min_extent)
+                self.cell_detector.watershed_distance_threshold = config.get('watershed_distance_threshold', self.cell_detector.watershed_distance_threshold)
+                
+                # Also update min_area and max_area for backward compatibility
+                self.cell_detector.min_area = self.cell_detector.area_min
+                self.cell_detector.max_area = self.cell_detector.area_max
+                
+                print(f"Parameters loaded from {CONFIG_FILE}")
+            else:
+                print(f"No config file found, using default parameters")
+        except Exception as e:
+            print(f"Error loading parameters: {e}")
+    
     def setup_ui(self):
         """Setup the user interface"""
         # Main container
@@ -130,10 +199,33 @@ class ToupCameraLiveGPU:
         self.video_canvas = tk.Canvas(self.main_frame, bg='black', highlightthickness=0)
         self.video_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Control panel
-        self.control_panel = tk.Frame(self.main_frame, bg='gray20', width=300)
-        self.control_panel.pack(side=tk.RIGHT, fill=tk.Y)
-        self.control_panel.pack_propagate(False)
+        # Control panel container with scrollbar
+        control_container = tk.Frame(self.main_frame, bg='gray20', width=300)
+        control_container.pack(side=tk.RIGHT, fill=tk.Y)
+        control_container.pack_propagate(False)
+        
+        # Create canvas for scrollable control panel
+        control_canvas = tk.Canvas(control_container, bg='gray20', highlightthickness=0)
+        scrollbar = tk.Scrollbar(control_container, orient="vertical", command=control_canvas.yview)
+        self.control_panel = tk.Frame(control_canvas, bg='gray20')
+        
+        # Configure scrolling
+        self.control_panel.bind(
+            "<Configure>",
+            lambda e: control_canvas.configure(scrollregion=control_canvas.bbox("all"))
+        )
+        
+        control_canvas.create_window((0, 0), window=self.control_panel, anchor="nw")
+        control_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack scrollbar and canvas
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        control_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Enable mousewheel scrolling
+        def _on_mousewheel(event):
+            control_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        control_canvas.bind_all("<MouseWheel>", _on_mousewheel)
         
         self.setup_control_panel()
         
@@ -298,7 +390,7 @@ class ToupCameraLiveGPU:
         
         tk.Label(gpu_frame, text="Max Area:", bg='gray20', fg='white').pack()
         self.area_max_var = tk.IntVar(value=self.cell_detector.area_max)
-        area_max_scale = tk.Scale(gpu_frame, from_=200, to=1000, 
+        area_max_scale = tk.Scale(gpu_frame, from_=200, to=3000, 
                                 variable=self.area_max_var, orient=tk.HORIZONTAL,
                                 command=self.update_area_max,
                                 bg='gray20', fg='white', highlightbackground='gray20')
@@ -320,6 +412,93 @@ class ToupCameraLiveGPU:
                                   command=self.update_canny_high,
                                   bg='gray20', fg='white', highlightbackground='gray20')
         canny_high_scale.pack(fill=tk.X, padx=5)
+        
+        # Perimeter parameters (for margin detection)
+        tk.Label(gpu_frame, text="Min Perimeter:", bg='gray20', fg='white').pack()
+        self.min_perimeter_var = tk.IntVar(value=self.cell_detector.min_perimeter)
+        min_perimeter_scale = tk.Scale(gpu_frame, from_=10, to=100, 
+                                      variable=self.min_perimeter_var, orient=tk.HORIZONTAL,
+                                      command=self.update_min_perimeter,
+                                      bg='gray20', fg='white', highlightbackground='gray20')
+        min_perimeter_scale.pack(fill=tk.X, padx=5)
+        
+        tk.Label(gpu_frame, text="Max Perimeter:", bg='gray20', fg='white').pack()
+        self.max_perimeter_var = tk.IntVar(value=self.cell_detector.max_perimeter)
+        max_perimeter_scale = tk.Scale(gpu_frame, from_=100, to=500, 
+                                      variable=self.max_perimeter_var, orient=tk.HORIZONTAL,
+                                      command=self.update_max_perimeter,
+                                      bg='gray20', fg='white', highlightbackground='gray20')
+        max_perimeter_scale.pack(fill=tk.X, padx=5)
+        
+        # Circularity parameters (for shape refinement)
+        tk.Label(gpu_frame, text="Min Circularity:", bg='gray20', fg='white').pack()
+        self.min_circularity_var = tk.DoubleVar(value=self.cell_detector.min_circularity)
+        min_circularity_scale = tk.Scale(gpu_frame, from_=0.1, to=1.0, resolution=0.1,
+                                        variable=self.min_circularity_var, orient=tk.HORIZONTAL,
+                                        command=self.update_min_circularity,
+                                        bg='gray20', fg='white', highlightbackground='gray20')
+        min_circularity_scale.pack(fill=tk.X, padx=5)
+        
+        tk.Label(gpu_frame, text="Max Circularity:", bg='gray20', fg='white').pack()
+        self.max_circularity_var = tk.DoubleVar(value=self.cell_detector.max_circularity)
+        max_circularity_scale = tk.Scale(gpu_frame, from_=1.0, to=5.0, resolution=0.1,
+                                        variable=self.max_circularity_var, orient=tk.HORIZONTAL,
+                                        command=self.update_max_circularity,
+                                        bg='gray20', fg='white', highlightbackground='gray20')
+        max_circularity_scale.pack(fill=tk.X, padx=5)
+        
+        # Morphology parameters
+        tk.Label(gpu_frame, text="Min Object Size:", bg='gray20', fg='white').pack()
+        self.min_object_size_var = tk.IntVar(value=self.cell_detector.min_object_size)
+        min_object_size_scale = tk.Scale(gpu_frame, from_=5, to=100, 
+                                        variable=self.min_object_size_var, orient=tk.HORIZONTAL,
+                                        command=self.update_min_object_size,
+                                        bg='gray20', fg='white', highlightbackground='gray20')
+        min_object_size_scale.pack(fill=tk.X, padx=5)
+        
+        # Hole filling parameter (fixes donut-shaped cells)
+        tk.Label(gpu_frame, text="Hole Fill Area:", bg='gray20', fg='white').pack()
+        self.hole_fill_area_var = tk.IntVar(value=self.cell_detector.hole_fill_area)
+        hole_fill_area_scale = tk.Scale(gpu_frame, from_=0, to=1000, 
+                                       variable=self.hole_fill_area_var, orient=tk.HORIZONTAL,
+                                       command=self.update_hole_fill_area,
+                                       bg='gray20', fg='white', highlightbackground='gray20')
+        hole_fill_area_scale.pack(fill=tk.X, padx=5)
+        
+        # Quality filters (to reject noise)
+        tk.Label(gpu_frame, text="Min Solidity (Reject Noise):", bg='gray20', fg='white').pack()
+        self.min_solidity_var = tk.DoubleVar(value=self.cell_detector.min_solidity)
+        min_solidity_scale = tk.Scale(gpu_frame, from_=0.0, to=1.0, resolution=0.05,
+                                     variable=self.min_solidity_var, orient=tk.HORIZONTAL,
+                                     command=self.update_min_solidity,
+                                     bg='gray20', fg='white', highlightbackground='gray20')
+        min_solidity_scale.pack(fill=tk.X, padx=5)
+        
+        tk.Label(gpu_frame, text="Min Extent (Reject Noise):", bg='gray20', fg='white').pack()
+        self.min_extent_var = tk.DoubleVar(value=self.cell_detector.min_extent)
+        min_extent_scale = tk.Scale(gpu_frame, from_=0.0, to=1.0, resolution=0.05,
+                                   variable=self.min_extent_var, orient=tk.HORIZONTAL,
+                                   command=self.update_min_extent,
+                                   bg='gray20', fg='white', highlightbackground='gray20')
+        min_extent_scale.pack(fill=tk.X, padx=5)
+        
+        # Watershed parameters
+        tk.Label(gpu_frame, text="Watershed Threshold:", bg='gray20', fg='white').pack()
+        self.watershed_threshold_var = tk.IntVar(value=self.cell_detector.watershed_distance_threshold)
+        watershed_threshold_scale = tk.Scale(gpu_frame, from_=1, to=30, 
+                                            variable=self.watershed_threshold_var, orient=tk.HORIZONTAL,
+                                            command=self.update_watershed_threshold,
+                                            bg='gray20', fg='white', highlightbackground='gray20')
+        watershed_threshold_scale.pack(fill=tk.X, padx=5)
+        
+        # CLAHE Tile Size
+        tk.Label(gpu_frame, text="CLAHE Tile Size:", bg='gray20', fg='white').pack()
+        self.clahe_tile_size_var = tk.IntVar(value=self.cell_detector.clahe_tile_size)
+        clahe_tile_size_scale = tk.Scale(gpu_frame, from_=4, to=16, 
+                                        variable=self.clahe_tile_size_var, orient=tk.HORIZONTAL,
+                                        command=self.update_clahe_tile_size,
+                                        bg='gray20', fg='white', highlightbackground='gray20')
+        clahe_tile_size_scale.pack(fill=tk.X, padx=5)
         
         # Exit Controls
         exit_frame = tk.LabelFrame(self.control_panel, text="Application", 
@@ -352,6 +531,46 @@ class ToupCameraLiveGPU:
     def update_canny_high(self, value):
         """Update Canny high threshold"""
         self.cell_detector.canny_high = int(value)
+    
+    def update_min_perimeter(self, value):
+        """Update minimum perimeter parameter"""
+        self.cell_detector.min_perimeter = int(value)
+    
+    def update_max_perimeter(self, value):
+        """Update maximum perimeter parameter"""
+        self.cell_detector.max_perimeter = int(value)
+    
+    def update_min_circularity(self, value):
+        """Update minimum circularity parameter"""
+        self.cell_detector.min_circularity = float(value)
+    
+    def update_max_circularity(self, value):
+        """Update maximum circularity parameter"""
+        self.cell_detector.max_circularity = float(value)
+    
+    def update_min_object_size(self, value):
+        """Update minimum object size parameter"""
+        self.cell_detector.min_object_size = int(value)
+    
+    def update_hole_fill_area(self, value):
+        """Update hole fill area parameter"""
+        self.cell_detector.hole_fill_area = int(value)
+    
+    def update_min_solidity(self, value):
+        """Update minimum solidity parameter (rejects irregular noise)"""
+        self.cell_detector.min_solidity = float(value)
+    
+    def update_min_extent(self, value):
+        """Update minimum extent parameter (rejects sparse noise)"""
+        self.cell_detector.min_extent = float(value)
+    
+    def update_watershed_threshold(self, value):
+        """Update watershed distance threshold parameter"""
+        self.cell_detector.watershed_distance_threshold = int(value)
+    
+    def update_clahe_tile_size(self, value):
+        """Update CLAHE tile size parameter"""
+        self.cell_detector.clahe_tile_size = int(value)
     
     def start_camera(self):
         """Start camera capture"""
@@ -696,8 +915,8 @@ class ToupCameraLiveGPU:
                         bbox_y2 = max(video_y1, min(bbox_y2, video_y2))
                     
                         # Debug: Print coordinate transformation for first few cells
-                        if i < 3:
-                            print(f"Cell {i}: AOI=({centroid[0]:.1f},{centroid[1]:.1f}) + offset{aoi_offset} = orig=({orig_centroid_x:.1f},{orig_centroid_y:.1f}) -> display=({centroid_x},{centroid_y}) [WITHIN FRAME]")
+                        # if i < 3:
+                        #     print(f"Cell {i}: AOI=({centroid[0]:.1f},{centroid[1]:.1f}) + offset{aoi_offset} = orig=({orig_centroid_x:.1f},{orig_centroid_y:.1f}) -> display=({centroid_x},{centroid_y}) [WITHIN FRAME]")
                         
                         # Draw centroid
                         cv2.circle(display_frame, (centroid_x, centroid_y), 3, (0, 255, 0), -1)
@@ -711,8 +930,9 @@ class ToupCameraLiveGPU:
                                    0.5, (255, 255, 255), 1)
                     else:
                         # Debug: Print when detection is outside video frame
-                        if i < 3:
-                            print(f"Cell {i}: AOI=({centroid[0]:.1f},{centroid[1]:.1f}) + offset{aoi_offset} = orig=({orig_centroid_x:.1f},{orig_centroid_y:.1f}) -> display=({centroid_x},{centroid_y}) [OUTSIDE FRAME - SKIPPED]")
+                        # if i < 3:
+                        #     print(f"Cell {i}: AOI=({centroid[0]:.1f},{centroid[1]:.1f}) + offset{aoi_offset} = orig=({orig_centroid_x:.1f},{orig_centroid_y:.1f}) -> display=({centroid_x},{centroid_y}) [OUTSIDE FRAME - SKIPPED]")
+                        pass  # Cell outside frame, skip drawing
                                
                 except Exception as e:
                     print(f"Error drawing cell {i}: {e}")
@@ -999,7 +1219,9 @@ class ToupCameraLiveGPU:
             self.fullscreen_canvas.focus_set()
             
             # Load calibration data and draw FOV border
-            calibration_file = "e:/Documents/Codes/Matlab/CellToolbox/python-version/calibration/latest_calibration.json"
+            # Use relative path from script location
+            calibration_file = os.path.join(SCRIPT_DIR, "..", "calibration", "latest_calibration.json")
+            calibration_file = os.path.normpath(calibration_file)
             self.homography_matrix = None
             try:
                 with open(calibration_file, 'r') as f:
@@ -1008,25 +1230,26 @@ class ToupCameraLiveGPU:
                 camera_resolution = calibration_data.get('camera_resolution', {})
                 
                 if fov_corners and len(fov_corners) == 4 and camera_resolution:
-                    # Draw FOV border with thin red lines
+                    # Draw FOV border with thin gray lines (similar to SingleDroplet)
                     for i in range(4):
                         start = fov_corners[i]
                         end = fov_corners[(i + 1) % 4]
                         self.canvas_widget.create_line(
                             start[0], start[1], end[0], end[1],
-                            fill='red', width=2, tags="fov_border"
+                            fill='#323232', width=1, tags="fov_border"
                         )
                     
                     # Compute homography matrix for cell position mapping
                     frame_width = camera_resolution['width']
                     frame_height = camera_resolution['height']
                     
-                    # Video frame corners (source points)
+                    # Video frame corners (source points) - flipped horizontally
+                    # When cell moves right in camera, projection moves left, so flip X
                     src_pts = np.array([
-                        [0, 0],
-                        [frame_width, 0],
-                        [frame_width, frame_height],
-                        [0, frame_height]
+                        [frame_width, 0],  # Top-right (was top-left)
+                        [0, 0],            # Top-left (was top-right)
+                        [0, frame_height], # Bottom-left (was bottom-right)
+                        [frame_width, frame_height]  # Bottom-right (was bottom-left)
                     ], dtype="float32")
                     
                     # FOV corners (destination points)
@@ -1104,24 +1327,31 @@ class ToupCameraLiveGPU:
                     
                     print(f"  Transformed to screen: ({screen_x:.1f}, {screen_y:.1f})")
                     
-                    # Calculate rectangle size (proportional to FOV)
-                    rect_size = 12  # Increased size for visibility
+                    # Calculate circle radius (proportional to FOV)
+                    circle_radius = 15  # Size for visibility
                     
-                    # Draw filled white rectangle
-                    self.canvas_widget.create_rectangle(
-                        screen_x - rect_size/2, screen_y - rect_size/2,
-                        screen_x + rect_size/2, screen_y + rect_size/2,
-                        fill="white", outline="gray", width=1, tags="cell_marker"
+                    # Draw filled white circle (disk)
+                    self.canvas_widget.create_oval(
+                        screen_x - circle_radius, screen_y - circle_radius,
+                        screen_x + circle_radius, screen_y + circle_radius,
+                        fill="white", outline="", tags="cell_marker"
                     )
                     
-                    # Draw cell ID
-                    self.canvas_widget.create_text(
-                        screen_x, screen_y - rect_size - 8,
-                        text=str(cell_id), fill="yellow", font=("Arial", 10, "bold"),
-                        tags="cell_marker"
+                    # Draw a small blue center dot for precise positioning
+                    self.canvas_widget.create_oval(
+                        screen_x - 2, screen_y - 2,
+                        screen_x + 2, screen_y + 2,
+                        fill="blue", outline="", tags="cell_marker"
                     )
                     
-                    print(f"  Drew rectangle at ({screen_x:.1f}, {screen_y:.1f})")
+                    # Draw cell ID (optional, can comment out if not needed)
+                    # self.canvas_widget.create_text(
+                    #     screen_x, screen_y - circle_radius - 8,
+                    #     text=str(cell_id), fill="yellow", font=("Arial", 10, "bold"),
+                    #     tags="cell_marker"
+                    # )
+                    
+                    print(f"  Drew white circle at ({screen_x:.1f}, {screen_y:.1f})")
             
             print(f"Canvas update complete: {active_count} active cells drawn")
         
@@ -1169,6 +1399,9 @@ class ToupCameraLiveGPU:
         """Handle application closing"""
         print("Closing application...")
         self.running = False
+        
+        # Save parameters before closing
+        self.save_parameters()
         
         # Close exposure control panel if open
         if self.exposure_control_panel:
