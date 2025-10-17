@@ -823,7 +823,7 @@ class ImageProcessor:
         except Exception as e:
             self.log(f"创建预览图像失败: {str(e)}", "ERROR")
             
-    def process_batch(self, brightfield_path, fluorescence_folder, darkfield_paths, output_folder, roi=None, offset_correction=None, enable_offset_optimization=False, search_range=5):
+    def process_batch(self, brightfield_path, fluorescence_folder, darkfield_paths, output_folder, roi=None, offset_correction=None, enable_offset_optimization=False, search_range=5, colormap_style='auto'):
         """
         批量处理荧光图像
         
@@ -836,6 +836,7 @@ class ImageProcessor:
             offset_correction: 偏移校正 (x_offset, y_offset) - 明场相对荧光的偏移
             enable_offset_optimization: 是否启用偏移优化
             search_range: 搜索范围 (±像素数)
+            colormap_style: ROI可视化色图样式 ('auto' 或 'global')
             
         Returns:
             处理是否成功
@@ -889,6 +890,55 @@ class ImageProcessor:
                 raise Exception("未找到荧光图像文件")
                 
             self.log(f"找到 {len(fluorescence_files)} 个荧光图像文件")
+            
+            # 计算全局色图范围 (如果使用global colormap)
+            global_vmin = None
+            global_vmax = None
+            self.log(f"ROI可视化色图样式: {colormap_style}")
+            if colormap_style == 'global':
+                self.update_progress(30, 100, "计算全局色图范围...")
+                self.log("使用全局色图模式 - 开始计算全局色图范围...")
+                all_values = []
+                for fluo_path in fluorescence_files:
+                    try:
+                        fluo_image = self.load_tiff_image(fluo_path, silent=True)
+                        fluo_r = self.extract_bayer_r_channel(fluo_image, silent=True)
+                        fluo_r_corrected = self.apply_dark_correction(fluo_r, dark_correction, silent=True)
+                        
+                        # 应用偏移并提取ROI区域的值
+                        if offset_correction is not None:
+                            x_offset, y_offset = offset_correction
+                            corrected_cell_mask = self._apply_offset_to_mask(cell_mask, x_offset, y_offset, fluo_r_corrected.shape)
+                        else:
+                            corrected_cell_mask = cell_mask
+                        
+                        # 提取ROI区域
+                        if roi and len(roi) == 4:
+                            x, y, w, h = roi
+                            img_h, img_w = fluo_r_corrected.shape
+                            x = max(0, min(x, img_w - 1))
+                            y = max(0, min(y, img_h - 1))
+                            w = min(w, img_w - x)
+                            h = min(h, img_h - y)
+                            if w > 0 and h > 0:
+                                roi_image = fluo_r_corrected[y:y+h, x:x+w]
+                            else:
+                                roi_image = fluo_r_corrected
+                        else:
+                            roi_image = fluo_r_corrected
+                        
+                        all_values.append(roi_image.min())
+                        all_values.append(roi_image.max())
+                    except Exception as e:
+                        self.log(f"计算全局范围时跳过文件: {os.path.basename(fluo_path)}", "WARNING")
+                        continue
+                
+                if all_values:
+                    global_vmin = np.min(all_values)
+                    global_vmax = np.max(all_values)
+                    self.log(f"全局色图范围: [{global_vmin:.2f}, {global_vmax:.2f}]")
+                else:
+                    self.log("未能计算全局色图范围，使用自动缩放", "WARNING")
             
             # 5. 处理每个荧光图像
             results = []
@@ -979,11 +1029,17 @@ class ImageProcessor:
                         os.makedirs(roi_vis_dir, exist_ok=True)
                         roi_vis_path = os.path.join(roi_vis_dir, f"roi_vis_{os.path.splitext(os.path.basename(fluo_path))[0]}.png")
                         
+                        # 第一个文件输出详细信息
+                        if i == 0:
+                            self.log(f"开始创建ROI可视化...")
+                            self.log(f"  ROI可视化目录: {os.path.abspath(roi_vis_dir)}")
+                            self.log(f"  第一个文件路径: {roi_vis_path}")
+                        
                         # 使用优化后的偏移（如果启用了优化），否则使用基础偏移
                         vis_offset = intensity_data.get('optimized_offset', offset_correction) if enable_offset_optimization else offset_correction
                         
                         # 传递完整的细胞掩膜和实际使用的偏移校正参数 (静默模式)
-                        self.create_fluorescence_roi_visualization(fluo_image, self.cell_mask, roi, intensity_data, roi_vis_path, elapsed_s, vis_offset, silent=True)
+                        self.create_fluorescence_roi_visualization(fluo_image, self.cell_mask, roi, intensity_data, roi_vis_path, elapsed_s, vis_offset, silent=True, global_vmin=global_vmin, global_vmax=global_vmax)
                         t1 = time.perf_counter()
                         vis_time = (t1 - t0) * 1000
                         total_vis_time += vis_time
@@ -1023,6 +1079,47 @@ class ImageProcessor:
                 os.makedirs(os.path.dirname(log_path), exist_ok=True)
                 self.save_processing_log(log_path, len(results), len(fluorescence_files))
                 
+                # 生成独立的色标尺图像（如果使用全局色图）
+                if global_vmin is not None and global_vmax is not None:
+                    try:
+                        colorbar_path = os.path.join(results_dir, "roi_visualizations", "colorbar_reference.png")
+                        colorbar_abs_path = os.path.abspath(colorbar_path)
+                        self.log(f"正在生成独立色标尺（PNG + SVG矢量图）...")
+                        self.log(f"  输出路径: {colorbar_abs_path}")
+                        self.log(f"  全局色图范围: vmin={global_vmin:.2f}, vmax={global_vmax:.2f}")
+                        
+                        # 确保目录存在
+                        colorbar_dir = os.path.dirname(colorbar_abs_path)
+                        if not os.path.exists(colorbar_dir):
+                            os.makedirs(colorbar_dir, exist_ok=True)
+                            self.log(f"  创建目录: {colorbar_dir}")
+                        
+                        self._create_standalone_colorbar(colorbar_abs_path, global_vmin, global_vmax)
+                        
+                        # 验证PNG文件
+                        png_exists = os.path.exists(colorbar_abs_path)
+                        svg_path = colorbar_abs_path.replace('.png', '.svg')
+                        svg_exists = os.path.exists(svg_path)
+                        
+                        if png_exists and svg_exists:
+                            png_size = os.path.getsize(colorbar_abs_path)
+                            svg_size = os.path.getsize(svg_path)
+                            self.log(f"✓ 独立色标尺已生成!")
+                            self.log(f"  PNG (高分辨率位图): {png_size} bytes")
+                            self.log(f"  SVG (无损矢量图): {svg_size} bytes")
+                            self.log(f"  路径: {colorbar_dir}")
+                        else:
+                            if not png_exists:
+                                self.log(f"✗ PNG文件未创建: {colorbar_abs_path}", "ERROR")
+                            if not svg_exists:
+                                self.log(f"✗ SVG文件未创建: {svg_path}", "ERROR")
+                    except Exception as colorbar_error:
+                        self.log(f"✗ 生成色标尺失败: {str(colorbar_error)}", "ERROR")
+                        import traceback
+                        self.log(f"详细错误: {traceback.format_exc()}", "ERROR")
+                else:
+                    self.log("未使用全局色图模式，不生成独立色标尺")
+                
                 self.update_progress(100, 100, "处理完成！")
                 
                 # 计算总用时
@@ -1037,6 +1134,10 @@ class ImageProcessor:
                 avg_total_per_image = (total_load_time + total_measure_time + total_vis_time) / num_processed if num_processed > 0 else 0
                 
                 # 批量输出最终总结 (单次日志输出，避免I/O瓶颈)
+                colorbar_line = ""
+                if global_vmin is not None and global_vmax is not None:
+                    colorbar_line = f"  - 色标尺参考: roi_visualizations/colorbar_reference.png + .svg (全局缩放矢量图)\n"
+                
                 completion_summary = (
                     f"\n批量处理完成！\n"
                     f"成功处理: {len(results)}/{len(fluorescence_files)} 个文件\n"
@@ -1044,6 +1145,7 @@ class ImageProcessor:
                     f"  - CSV数据: csv/fluorescence_intensity_results.csv\n"
                     f"  - 细胞掩膜: masks/cell_mask.png\n"
                     f"  - ROI可视化: roi_visualizations/ ({len(results)} 个文件)\n"
+                    f"{colorbar_line}"
                     f"  - 明场叠加图: images/cell_overlay.png\n"
                     f"\n⏱️ 性能统计:\n"
                     f"  总用时: {total_batch_time:.2f}s\n"
@@ -1129,7 +1231,7 @@ class ImageProcessor:
         except Exception as e:
             self.log(f"创建叠加图像失败: {str(e)}", "ERROR")
             
-    def create_fluorescence_roi_visualization(self, fluorescence_image, cell_mask, roi, intensity_data, output_path, elapsed_time, offset_correction=None, silent=False):
+    def create_fluorescence_roi_visualization(self, fluorescence_image, cell_mask, roi, intensity_data, output_path, elapsed_time, offset_correction=None, silent=False, global_vmin=None, global_vmax=None):
         """
         创建荧光图像的ROI可视化，包含细胞轮廓和测量值
         
@@ -1142,6 +1244,8 @@ class ImageProcessor:
             elapsed_time: 经过的时间（秒）
             offset_correction: 偏移校正 (x_offset, y_offset)
             silent: 是否静默执行 (不输出日志)
+            global_vmin: 全局色图最小值 (用于global colormap style)
+            global_vmax: 全局色图最大值 (用于global colormap style)
         """
         try:
             # 确保numpy可用
@@ -1189,8 +1293,18 @@ class ImageProcessor:
                 roi_mask = corrected_cell_mask.copy() if corrected_cell_mask is not None else None
             
             # 归一化到0-255用于显示
-            if roi_image.max() > roi_image.min():
-                roi_normalized = ((roi_image - roi_image.min()) / (roi_image.max() - roi_image.min()) * 255).astype(np.uint8)
+            # 使用全局范围（如果提供）或局部范围
+            if global_vmin is not None and global_vmax is not None:
+                # 全局缩放模式：使用所有图像的统一范围
+                vmin = global_vmin
+                vmax = global_vmax
+            else:
+                # 自动缩放模式：使用当前图像的范围
+                vmin = roi_image.min()
+                vmax = roi_image.max()
+            
+            if vmax > vmin:
+                roi_normalized = np.clip(((roi_image - vmin) / (vmax - vmin) * 255), 0, 255).astype(np.uint8)
             else:
                 roi_normalized = np.zeros_like(roi_image, dtype=np.uint8)
             
@@ -1223,6 +1337,204 @@ class ImageProcessor:
                 import traceback
                 self.log(f"详细错误信息: {traceback.format_exc()}", "ERROR")
             
+    def _create_standalone_colorbar(self, output_path, vmin, vmax):
+        """
+        创建高分辨率独立色标尺图像（PNG + SVG矢量格式）
+        
+        Args:
+            output_path: 输出路径（PNG格式）
+            vmin: 色图最小值
+            vmax: 色图最大值
+        """
+        import numpy as np
+        from PIL import Image as PILImage
+        
+        # 色标尺参数（高分辨率）
+        colorbar_width = 200  # 色标尺总宽度
+        colorbar_height = 800  # 色标尺主体高度（不含顶部和底部白边）
+        top_padding = 60  # 顶部白边
+        bottom_padding = 60  # 底部白边
+        total_height = colorbar_height + top_padding + bottom_padding  # 总高度
+        bar_width = 80  # 实际色条宽度
+        padding = 20  # 边距
+        
+        # 创建色标尺画布（白色背景）
+        colorbar_canvas = np.ones((colorbar_height, colorbar_width, 3), dtype=np.uint8) * 255
+        
+        # 生成高分辨率垂直渐变色条
+        gradient = np.linspace(255, 0, colorbar_height).astype(np.uint8)
+        gradient_colored = cv2.applyColorMap(gradient[:, np.newaxis], cv2.COLORMAP_JET)
+        
+        # 将色条绘制到画布上（居中放置）- 需要将1像素宽的渐变扩展到bar_width像素
+        bar_x_start = 50  # 左侧留出空间给标题
+        # 将单列渐变重复bar_width次以填充整个色条宽度
+        gradient_bar = np.tile(gradient_colored[:, 0, :], (bar_width, 1, 1)).transpose(1, 0, 2)
+        colorbar_canvas[:, bar_x_start:bar_x_start + bar_width] = gradient_bar
+        
+        # 添加刻度和数值标签
+        num_ticks = 21  # 刻度数量（高分辨率，更多刻度）
+        tick_positions = np.linspace(0, colorbar_height - 1, num_ticks).astype(int)
+        tick_values = np.linspace(vmax, vmin, num_ticks)  # 从上到下：高到低
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        font_thickness = 1
+        font_color = (0, 0, 0)  # 黑色
+        
+        for tick_pos, tick_val in zip(tick_positions, tick_values):
+            # 绘制刻度线（从色条延伸）
+            tick_x_start = bar_x_start + bar_width
+            tick_x_end = tick_x_start + 8
+            cv2.line(colorbar_canvas, (tick_x_start, tick_pos), (tick_x_end, tick_pos), font_color, 2)
+            
+            # 绘制数值标签
+            label = f'{tick_val:.0f}'
+            text_size = cv2.getTextSize(label, font, font_scale, font_thickness)[0]
+            text_x = tick_x_end + 5
+            text_y = tick_pos + text_size[1] // 2
+            cv2.putText(colorbar_canvas, label, (text_x, text_y), font, font_scale, font_color, font_thickness, cv2.LINE_AA)
+        
+        # 添加标题 "Intensity"（竖直方向，在左侧）
+        title = "Intensity"
+        title_font_scale = 0.7
+        title_thickness = 2
+        
+        # 计算标题位置（居中）
+        title_size = cv2.getTextSize(title, font, title_font_scale, title_thickness)[0]
+        title_x = 10
+        title_y = colorbar_height // 2 + title_size[0] // 2
+        
+        # 创建旋转的标题文本（使用临时画布）
+        title_canvas = np.ones((title_size[0] + 20, title_size[1] + 20, 3), dtype=np.uint8) * 255
+        cv2.putText(title_canvas, title, (10, title_size[1] + 5), font, title_font_scale, font_color, title_thickness, cv2.LINE_AA)
+        
+        # 旋转90度（逆时针）
+        title_rotated = cv2.rotate(title_canvas, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        
+        # 将旋转后的标题粘贴到色标尺画布上
+        title_h, title_w = title_rotated.shape[:2]
+        y_start = max(0, title_y - title_h // 2)
+        y_end = min(colorbar_height, y_start + title_h)
+        x_end = min(colorbar_width, title_x + title_w)
+        actual_h = y_end - y_start
+        actual_w = x_end - title_x
+        
+        if actual_h > 0 and actual_w > 0:
+            colorbar_canvas[y_start:y_end, title_x:x_end] = title_rotated[:actual_h, :actual_w, :]
+        
+        # 添加顶部和底部白边，创建最终画布
+        final_canvas = np.ones((total_height, colorbar_width, 3), dtype=np.uint8) * 255
+        final_canvas[top_padding:top_padding + colorbar_height, :] = colorbar_canvas
+        
+        # 保存PNG图像
+        output_dir = os.path.dirname(output_path)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+            self.log(f"  [colorbar] 创建输出目录: {output_dir}")
+        
+        self.log(f"  [colorbar] 转换图像格式...")
+        image_rgb = cv2.cvtColor(final_canvas, cv2.COLOR_BGR2RGB)
+        pil_image = PILImage.fromarray(image_rgb)
+        
+        self.log(f"  [colorbar] 保存PNG文件: {output_path}")
+        pil_image.save(output_path, "PNG", dpi=(300, 300))
+        
+        # 立即验证PNG
+        if os.path.exists(output_path):
+            size = os.path.getsize(output_path)
+            self.log(f"  [colorbar] ✓ PNG文件已保存 ({size} bytes)")
+        else:
+            self.log(f"  [colorbar] ✗ PNG文件保存失败", "ERROR")
+        
+        # 生成SVG矢量图
+        svg_path = output_path.replace('.png', '.svg')
+        self._create_colorbar_svg(svg_path, vmin, vmax, colorbar_width, colorbar_height, top_padding, bottom_padding, bar_width)
+        
+        if os.path.exists(svg_path):
+            svg_size = os.path.getsize(svg_path)
+            self.log(f"  [colorbar] ✓ SVG矢量图已保存 ({svg_size} bytes)")
+        else:
+            self.log(f"  [colorbar] ✗ SVG文件保存失败", "ERROR")
+    
+    def _create_colorbar_svg(self, svg_path, vmin, vmax, width, height, top_pad, bottom_pad, bar_width):
+        """
+        创建SVG矢量格式色标尺
+        
+        Args:
+            svg_path: SVG输出路径
+            vmin: 最小值
+            vmax: 最大值
+            width: 画布宽度
+            height: 色条高度（不含padding）
+            top_pad: 顶部白边
+            bottom_pad: 底部白边
+            bar_width: 色条宽度
+        """
+        total_height = height + top_pad + bottom_pad
+        bar_x = 50  # 色条左侧位置
+        bar_y = top_pad  # 色条顶部位置（考虑padding）
+        
+        # JET colormap的关键颜色点（从上到下：红→黄→绿→青→蓝）
+        jet_colors = [
+            (0.0, '#8B0000'),    # 深红
+            (0.125, '#FF0000'),  # 红
+            (0.25, '#FF7F00'),   # 橙
+            (0.375, '#FFFF00'),  # 黄
+            (0.5, '#00FF00'),    # 绿
+            (0.625, '#00FFFF'),  # 青
+            (0.75, '#0000FF'),   # 蓝
+            (0.875, '#00007F'),  # 深蓝
+            (1.0, '#000080')     # 更深蓝
+        ]
+        
+        # 生成SVG内容
+        svg_content = f'''<?xml version="1.0" encoding="UTF-8"?>
+<svg width="{width}" height="{total_height}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="jet-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+'''
+        
+        # 添加颜色渐变点
+        for offset, color in jet_colors:
+            svg_content += f'            <stop offset="{offset*100:.1f}%" style="stop-color:{color};stop-opacity:1" />\n'
+        
+        svg_content += '''        </linearGradient>
+    </defs>
+    
+    <!-- 白色背景 -->
+    <rect width="{}" height="{}" fill="white"/>
+    
+    <!-- 色条 -->
+    <rect x="{}" y="{}" width="{}" height="{}" fill="url(#jet-gradient)" stroke="black" stroke-width="1"/>
+    
+'''.format(width, total_height, bar_x, bar_y, bar_width, height)
+        
+        # 添加刻度和标签
+        num_ticks = 21
+        for i in range(num_ticks):
+            tick_y = bar_y + (i / (num_ticks - 1)) * height
+            tick_value = vmax - (i / (num_ticks - 1)) * (vmax - vmin)
+            tick_x_end = bar_x + bar_width + 8
+            
+            # 刻度线
+            svg_content += f'    <line x1="{bar_x + bar_width}" y1="{tick_y}" x2="{tick_x_end}" y2="{tick_y}" stroke="black" stroke-width="2"/>\n'
+            
+            # 数值标签
+            svg_content += f'    <text x="{tick_x_end + 5}" y="{tick_y + 4}" font-family="Arial" font-size="12" fill="black">{tick_value:.0f}</text>\n'
+        
+        # 添加"Intensity"标签（旋转90度）
+        label_x = 15
+        label_y = top_pad + height / 2
+        svg_content += f'''    <text x="{label_x}" y="{label_y}" font-family="Arial" font-size="14" fill="black" 
+          transform="rotate(-90 {label_x} {label_y})" text-anchor="middle" font-weight="bold">Intensity</text>
+'''
+        
+        svg_content += '</svg>'
+        
+        # 保存SVG文件
+        with open(svg_path, 'w', encoding='utf-8') as f:
+            f.write(svg_content)
+    
     def _save_roi_image(self, image, output_path):
         """
         保存ROI图像的简化方法
@@ -1232,8 +1544,13 @@ class ImageProcessor:
             output_path: 输出路径
         """
         try:
+            # 获取绝对路径
+            abs_path = os.path.abspath(output_path)
+            
             # 确保输出目录存在
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            output_dir = os.path.dirname(abs_path)
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
             
             # 方法1: 使用PIL保存（最可靠）
             from PIL import Image as PILImage
@@ -1243,14 +1560,21 @@ class ImageProcessor:
             pil_image = PILImage.fromarray(image_rgb)
             
             # 保存为PNG
-            pil_image.save(output_path, "PNG")
+            pil_image.save(abs_path, "PNG")
             
-            # 验证保存结果
-            if os.path.exists(output_path):
-                file_size = os.path.getsize(output_path)
-                self.log(f"ROI图像保存成功: {output_path} ({file_size} bytes)")
+            # 立即验证保存结果
+            import time
+            time.sleep(0.01)  # 短暂等待确保文件系统同步
+            
+            if os.path.exists(abs_path):
+                file_size = os.path.getsize(abs_path)
+                # 仅在保存前3个文件时详细输出，避免日志刷屏
+                if abs_path.endswith(("_0.png", "_1.png", "_2.png")) or "colorbar" in abs_path:
+                    self.log(f"✓ ROI图像已保存: {os.path.basename(abs_path)} ({file_size} bytes)")
+                    self.log(f"  完整路径: {abs_path}")
             else:
-                self.log(f"ROI图像保存失败: 文件未创建", "ERROR")
+                self.log(f"✗ ROI图像保存失败: 文件未创建", "ERROR")
+                self.log(f"  预期路径: {abs_path}", "ERROR")
                 
         except Exception as e:
             self.log(f"ROI图像保存失败: {str(e)}", "ERROR")

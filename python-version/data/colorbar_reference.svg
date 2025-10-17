@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="200" height="920" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="jet-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0.0%" style="stop-color:#8B0000;stop-opacity:1" />
+            <stop offset="12.5%" style="stop-color:#FF0000;stop-opacity:1" />
+            <stop offset="25.0%" style="stop-color:#FF7F00;stop-opacity:1" />
+            <stop offset="37.5%" style="stop-color:#FFFF00;stop-opacity:1" />
+            <stop offset="50.0%" style="stop-color:#00FF00;stop-opacity:1" />
+            <stop offset="62.5%" style="stop-color:#00FFFF;stop-opacity:1" />
+            <stop offset="75.0%" style="stop-color:#0000FF;stop-opacity:1" />
+            <stop offset="87.5%" style="stop-color:#000099;stop-opacity:1" />  
+            <stop offset="100.0%" style="stop-color:#000033;stop-opacity:1" /> 
+        </linearGradient>
+    </defs>
+    
+    <!-- 白色背景 -->
+    <rect width="200" height="920" fill="white"/>
+    
+    <!-- 色条 -->
+    <rect x="50" y="60" width="80" height="800" fill="url(#jet-gradient)" stroke="black" stroke-width="1"/>
+    
+    <line x1="130" y1="60.0" x2="138" y2="60.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="64.0" font-family="Arial" font-size="12" fill="black">983</text>
+    <line x1="130" y1="100.0" x2="138" y2="100.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="104.0" font-family="Arial" font-size="12" fill="black">934</text>
+    <line x1="130" y1="140.0" x2="138" y2="140.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="144.0" font-family="Arial" font-size="12" fill="black">885</text>
+    <line x1="130" y1="180.0" x2="138" y2="180.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="184.0" font-family="Arial" font-size="12" fill="black">836</text>
+    <line x1="130" y1="220.0" x2="138" y2="220.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="224.0" font-family="Arial" font-size="12" fill="black">787</text>
+    <line x1="130" y1="260.0" x2="138" y2="260.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="264.0" font-family="Arial" font-size="12" fill="black">737</text>
+    <line x1="130" y1="300.0" x2="138" y2="300.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="304.0" font-family="Arial" font-size="12" fill="black">688</text>
+    <line x1="130" y1="340.0" x2="138" y2="340.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="344.0" font-family="Arial" font-size="12" fill="black">639</text>
+    <line x1="130" y1="380.0" x2="138" y2="380.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="384.0" font-family="Arial" font-size="12" fill="black">590</text>
+    <line x1="130" y1="420.0" x2="138" y2="420.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="424.0" font-family="Arial" font-size="12" fill="black">541</text>
+    <line x1="130" y1="460.0" x2="138" y2="460.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="464.0" font-family="Arial" font-size="12" fill="black">492</text>
+    <line x1="130" y1="500.00000000000006" x2="138" y2="500.00000000000006" stroke="black" stroke-width="2"/>
+    <text x="143" y="504.00000000000006" font-family="Arial" font-size="12" fill="black">442</text>
+    <line x1="130" y1="540.0" x2="138" y2="540.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="544.0" font-family="Arial" font-size="12" fill="black">393</text>
+    <line x1="130" y1="580.0" x2="138" y2="580.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="584.0" font-family="Arial" font-size="12" fill="black">344</text>
+    <line x1="130" y1="620.0" x2="138" y2="620.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="624.0" font-family="Arial" font-size="12" fill="black">295</text>
+    <line x1="130" y1="660.0" x2="138" y2="660.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="664.0" font-family="Arial" font-size="12" fill="black">246</text>
+    <line x1="130" y1="700.0" x2="138" y2="700.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="704.0" font-family="Arial" font-size="12" fill="black">197</text>
+    <line x1="130" y1="740.0" x2="138" y2="740.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="744.0" font-family="Arial" font-size="12" fill="black">147</text>
+    <line x1="130" y1="780.0" x2="138" y2="780.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="784.0" font-family="Arial" font-size="12" fill="black">98</text>
+    <line x1="130" y1="820.0" x2="138" y2="820.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="824.0" font-family="Arial" font-size="12" fill="black">49</text>
+    <line x1="130" y1="860.0" x2="138" y2="860.0" stroke="black" stroke-width="2"/>
+    <text x="143" y="864.0" font-family="Arial" font-size="12" fill="black">0</text>
+    <text x="15" y="460.0" font-family="Arial" font-size="14" fill="black" 
+          transform="rotate(-90 15 460.0)" text-anchor="middle" font-weight="bold">Intensity</text>
+</svg>

@@ -209,10 +209,33 @@ class BatchFluoMeasurementApp:
         ttk.Label(param_frame, text=optimization_info, foreground='gray', 
                  font=('Arial', 8)).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(2, 5))
         
+        # 色图样式选择
+        colormap_frame = ttk.LabelFrame(param_frame, text="ROI可视化色图样式", padding="10")
+        colormap_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 5))
+        
+        # 色图样式单选按钮
+        self.colormap_style_var = tk.StringVar(value="auto")
+        
+        auto_radio = ttk.Radiobutton(colormap_frame, text="自动缩放 (每张图像独立)", 
+                                     variable=self.colormap_style_var, value="auto")
+        auto_radio.grid(row=0, column=0, sticky=tk.W, pady=2)
+        
+        global_radio = ttk.Radiobutton(colormap_frame, text="全局缩放 (所有图像统一)", 
+                                       variable=self.colormap_style_var, value="global")
+        global_radio.grid(row=1, column=0, sticky=tk.W, pady=2)
+        
+        # 色图样式说明
+        colormap_info = (
+            "• 自动缩放: 每张图像使用自己的最小/最大值映射颜色，最亮像素均为红色\n"
+            "• 全局缩放: 所有图像使用相同的最小/最大值，可直接比较不同图像的亮度差异"
+        )
+        ttk.Label(colormap_frame, text=colormap_info, foreground='gray', 
+                 font=('Arial', 8), justify=tk.LEFT).grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+        
         # 参数说明
         info_text = "细胞检测参数通过动态预览窗口进行调整和保存"
         ttk.Label(param_frame, text=info_text, foreground='gray', 
-                 font=('Arial', 9)).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+                 font=('Arial', 9)).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
                  
     def on_offset_toggle(self):
         """偏移校正开关回调"""
@@ -461,7 +484,8 @@ class BatchFluoMeasurementApp:
             'roi': self.roi,
             'offset_correction': self.get_offset_correction(),
             'enable_offset_optimization': self.enable_offset_optimization_var.get(),
-            'search_range': self.get_search_range()
+            'search_range': self.get_search_range(),
+            'colormap_style': self.colormap_style_var.get()
         }
         
         # 在新线程中运行处理
@@ -498,7 +522,8 @@ class BatchFluoMeasurementApp:
                 roi=self.processing_params['roi'],
                 offset_correction=self.processing_params['offset_correction'],
                 enable_offset_optimization=self.processing_params['enable_offset_optimization'],
-                search_range=self.processing_params['search_range']
+                search_range=self.processing_params['search_range'],
+                colormap_style=self.processing_params['colormap_style']
             )
             
             if result:
@@ -716,6 +741,9 @@ class BatchFluoMeasurementApp:
             'offset_optimization': {
                 'enabled': self.enable_offset_optimization_var.get(),
                 'search_range': self.search_range_var.get()
+            },
+            'visualization': {
+                'colormap_style': self.colormap_style_var.get()
             }
         }
         
@@ -752,6 +780,10 @@ class BatchFluoMeasurementApp:
             self.enable_offset_optimization_var.set(optimization_config.get('enabled', False))
             self.search_range_var.set(optimization_config.get('search_range', '5'))
             self.on_optimization_toggle()  # 更新UI状态
+            
+            # 加载可视化配置
+            visualization_config = config.get('visualization', {})
+            self.colormap_style_var.set(visualization_config.get('colormap_style', 'auto'))
             
             self.log_message("已加载保存的配置")
             

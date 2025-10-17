@@ -1,22 +1,25 @@
 {
-    "brightfield_path": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/2/Fluo/DSC02930-RAWcomposite.tif",
-    "fluorescence_folder": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/2/Fluo",
-    "darkfield_paths": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/Dark/tif/Dark1.tif;E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/Dark/tif/Dark2.tif;E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/Dark/tif/Dark3.tif;E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/Dark/tif/Dark4.tif;E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/Dark/tif/Dark5.tif",
-    "output_folder": "E:/Documents/OneDrive - Wuchang Experimental High School/课题组/CX/有源数字液滴微流控/光流控/HeLa电穿孔/20251002/2/Output/Demo",
+    "brightfield_path": "D:/Documents/20251015/320Vpp-2/BF/BF.tif",
+    "fluorescence_folder": "D:/Documents/20251015/320Vpp-2/Fluo",
+    "darkfield_paths": "D:/Documents/20251015/Dark/Dark1.tif;D:/Documents/20251015/Dark/Dark2.tif;D:/Documents/20251015/Dark/Dark3.tif;D:/Documents/20251015/Dark/Dark4.tif;D:/Documents/20251015/Dark/Dark5.tif",
+    "output_folder": "D:/Documents/20251015/320Vpp-2/Notexposed",
     "roi": [
-        1970,
-        1666,
-        60,
-        57
+        1982,
+        995,
+        71,
+        66
     ],
     "offset_correction": {
-        "enabled": true,
-        "x_offset": "0",
-        "y_offset": "6"
+        "enabled": false,
+        "x_offset": "100",
+        "y_offset": "10"
     },
     "offset_optimization": {
         "enabled": true,
         "search_range": "10"
     },
-    "last_saved": "2025-10-10T11:58:12.336585"
+    "visualization": {
+        "colormap_style": "global"
+    },
+    "last_saved": "2025-10-16T17:17:25.062230"
 }
