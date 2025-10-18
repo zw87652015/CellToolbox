@@ -71,7 +71,7 @@ class ToupCameraLiveGPU:
         self.tracked_cells = {}
         self.show_predictions = False
         
-        # Projection pattern size multiplier (0.1 to 3.0)
+        # Projection pattern size multiplier (0.1 to 5.0)
         self.pattern_size_multiplier = 1.0
         
         # DG2052 Signal Generator Control
@@ -424,7 +424,7 @@ class ToupCameraLiveGPU:
                                           bg='gray20', fg='yellow', font=('Arial', 9), width=5)
         self.pattern_size_label.pack(side=tk.RIGHT, padx=5)
         
-        pattern_size_slider = tk.Scale(pattern_size_frame, from_=0.1, to=3.0, resolution=0.1,
+        pattern_size_slider = tk.Scale(pattern_size_frame, from_=0.1, to=5.0, resolution=0.1,
                                       orient=tk.HORIZONTAL, variable=self.pattern_size_var,
                                       command=self.update_pattern_size,
                                       bg='gray20', fg='white', highlightthickness=0)

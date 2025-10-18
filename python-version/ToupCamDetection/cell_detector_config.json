@@ -2,7 +2,7 @@
     "clahe_clip_limit": 2.0,
     "clahe_tile_size": 8,
     "area_min": 150,
-    "area_max": 3000,
+    "area_max": 4590,
     "canny_low": 50,
     "canny_high": 150,
     "min_perimeter": 30,
@@ -14,7 +14,7 @@
     "min_solidity": 0.95,
     "min_extent": 0.65,
     "watershed_distance_threshold": 14,
-    "pattern_size_multiplier": 3.0,
-    "trigger_cooldown": 2.0,
+    "pattern_size_multiplier": 5.0,
+    "trigger_cooldown": 1.0,
     "verbose_mode": true
 }
