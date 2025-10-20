@@ -1,0 +1,65 @@
+# YOLO11 Cell Detection Configuration
+
+# Model settings
+model:
+  # YOLO11 model size: n (nano), s (small), m (medium), l (large), x (extra large)
+  size: "n"  # Start with nano for faster inference
+  # Path to custom trained model (if available), otherwise uses pretrained COCO
+  custom_weights: "trained_models/cell_detection/weights/best.pt"
+  # Confidence threshold for detection
+  confidence_threshold: 0.05  # Very low to see all detections
+  # IoU threshold for NMS
+  iou_threshold: 0.45
+
+# Detection settings
+detection:
+  # Image size for inference (must be multiple of 32)
+  image_size: 640
+  # Device: 'cpu', 'cuda', 'cuda:0', etc.
+  device: "cpu"
+  # Half precision (FP16) for faster inference on GPU
+  half_precision: false
+  # Maximum number of detections per image
+  max_detections: 300
+
+# Input/Output settings
+paths:
+  # Input directory containing images
+  input_dir: "input_images"
+  # Output directory for results
+  output_dir: "output_results"
+  # Save annotated images
+  save_images: true
+  # Save detection results to CSV
+  save_csv: true
+  # Save detection results to JSON
+  save_json: true
+
+# Visualization settings
+visualization:
+  # Draw bounding boxes
+  draw_boxes: true
+  # Draw labels
+  draw_labels: true
+  # Draw confidence scores
+  draw_confidence: true
+  # Box line thickness
+  box_thickness: 2
+  # Font scale for labels
+  font_scale: 0.5
+  # Box color (BGR format)
+  box_color: [0, 255, 0]  # Green
+  # Text color (BGR format)
+  text_color: [255, 255, 255]  # White
+
+# Cell-specific settings (for custom trained models)
+cell_detection:
+  # Class names for cell types (customize based on your model)
+  class_names: ["cell"]
+  # Minimum cell size (pixels) - filter out small detections
+  min_size: 10
+  # Maximum cell size (pixels) - filter out large detections
+  max_size: 2000
+  # Aspect ratio filter (width/height) - filter elongated objects
+  min_aspect_ratio: 0.3
+  max_aspect_ratio: 3.0

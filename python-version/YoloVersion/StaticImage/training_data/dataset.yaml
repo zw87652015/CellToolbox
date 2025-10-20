@@ -1,0 +1,30 @@
+# YOLO11 Cell Detection Dataset Configuration
+# This file defines your training dataset structure
+
+# Dataset root path (relative to this file or absolute)
+path: .  # Current directory (training_data/)
+
+# Image directories (relative to 'path')
+train: images/train  # Training images (70-80% of data)
+val: images/val      # Validation images (10-20% of data)
+test: images/test    # Test images (10% of data) - optional
+
+# Number of classes
+nc: 1  # Single class: cell
+
+# Class names (must match number of classes)
+names: ['cell']
+
+# For multiple cell types, use:
+# nc: 3
+# names: ['cell_type1', 'cell_type2', 'cell_type3']
+
+# Example for different cell stages:
+# nc: 4
+# names: ['interphase', 'prophase', 'metaphase', 'anaphase']
+
+# Notes:
+# - Label files must be in corresponding labels/ subdirectories
+# - Each image needs a .txt file with same name in labels/ folder
+# - Label format: <class_id> <center_x> <center_y> <width> <height>
+# - All coordinates are normalized (0-1)
