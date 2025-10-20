@@ -5,11 +5,11 @@ model:
   # YOLO11 model size: n (nano), s (small), m (medium), l (large), x (extra large)
   size: "n"  # Start with nano for faster inference
   # Path to custom trained model (if available), otherwise uses pretrained COCO
-  custom_weights: "trained_models/cell_detection/weights/best.pt"
+  custom_weights: "trained_models/cell_detection_v2/weights/best.pt"
   # Confidence threshold for detection
   confidence_threshold: 0.05  # Very low to see all detections
   # IoU threshold for NMS
-  iou_threshold: 0.45
+  iou_threshold: 0.4
 
 # Detection settings
 detection:

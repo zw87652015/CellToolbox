@@ -1,8 +1,8 @@
 # YOLO11 Cell Detection Dataset Configuration
 # This file defines your training dataset structure
 
-# Dataset root path (relative to this file or absolute)
-path: .  # Current directory (training_data/)
+# Dataset root path (use absolute path for YOLO compatibility)
+path: E:\Documents\Codes\Matlab\CellToolbox\python-version\YoloVersion\StaticImage\training_data
 
 # Image directories (relative to 'path')
 train: images/train  # Training images (70-80% of data)

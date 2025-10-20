@@ -67,6 +67,8 @@ python dataset_creator.py
 |-----|--------|-------|
 | **R** | Detect cells | Run detection on whole image |
 | **S** | Save YOLO labels | Saves current image labels |
+| **Q** | Copy from previous | Copy boxes from previous frame + enable group drag |
+| **E** | Toggle Group Drag | Enable/disable group drag mode |
 | **D** | Next image | Navigate forward |
 | **A** | Previous image | Navigate backward |
 | **Right Arrow** | Next image | Alternative to D |
@@ -85,7 +87,49 @@ python dataset_creator.py
 
 **Ultra-Fast Workflow:** Load image → **R** (detect) → **S** (save) → **D** (next) → Repeat
 
-**All with left hand (WASD + R)!** ⌨️
+**Video Frame Workflow:** Load frame → **R** (detect) → **S** (save) → **D** (next) → **Q** (copy) → Drag to shift → **S** (save) → **D** (next) → Repeat
+
+**Manual Group Drag:** Load image → **R** (detect) → **E** (enable drag) → Click box → Drag → **E** (disable) → **S** (save)
+
+**All with left hand (WASD + R + Q + E)!** ⌨️
+
+### Video Frame Labeling (Q Key + Group Drag Button)
+
+**Perfect for MP4-exported image sequences** where cells shift slightly between frames:
+
+**Workflow:**
+1. **Label first frame**: Detect cells normally (R key or button)
+2. **Save**: Press **S**
+3. **Next frame**: Press **D**
+4. **Copy boxes**: Press **Q** - copies ALL boxes from previous frame
+5. **Group drag enabled**: Button shows "Group Drag: ON"
+6. **Drag boxes**: Click and drag anywhere to shift all boxes together
+7. **Save**: Press **S** - saves adjusted boxes
+8. **Repeat**: Press **D** for next frame, **Q** to copy again
+
+**Alternative: Manual Group Drag**
+- Press **E** key or click **"Group Drag: OFF"** button to enable
+- Works with current boxes (no need to copy from previous)
+- Press **E** again or click button to toggle off
+
+**Key Features:**
+- ✅ **Button control**: Toggle group drag mode on/off manually
+- ✅ **One-time drag**: After dragging, automatically returns to normal mode
+- ✅ **Copies everything**: Both auto-detected cells AND manual boxes
+- ✅ **Auto manual mode**: Automatically enables manual mode for dragging
+- ✅ **Visual feedback**: Boxes turn orange during group drag
+- ✅ **Resets on navigation**: Moving to next image clears the mode
+
+**Example:**
+```
+Frame 1: R (detect) → S (save) → D (next)
+Frame 2: Q (copy) → Drag 10px right → S (save) → D (next)
+Frame 3: Q (copy) → Drag 5px down → S (save) → D (next)
+...
+
+Or manually:
+Frame 1: R (detect) → Click "Group Drag: OFF" → Drag → S (save)
+```
 
 ### Manual Labeling Mode
 

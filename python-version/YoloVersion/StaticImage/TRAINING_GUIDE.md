@@ -150,9 +150,9 @@ The file `training_data/dataset.yaml` is already created. Verify it looks like t
 
 ```yaml
 path: .  # Current directory
-train: images/train
-val: images/val
-test: images/test
+train: training_data/images/train
+val: training_data/images/val
+test: training_data/images/test
 
 nc: 1  # Number of classes
 names: ['cell']  # Class names

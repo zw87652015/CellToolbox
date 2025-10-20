@@ -88,20 +88,33 @@ class DatasetOrganizer:
         ttk.Radiobutton(options_frame, text="Move files (remove originals)", 
                        variable=self.copy_mode_var, value="move").pack(anchor=tk.W)
         
-        # Train/val split
+        # Train/val/test split
         split_frame = ttk.Frame(options_frame)
         split_frame.pack(fill=tk.X, pady=5)
         
         self.split_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(split_frame, text="Split into train/val (random)", 
+        ttk.Checkbutton(split_frame, text="Split into train/val/test (random)", 
                        variable=self.split_var, 
                        command=self.toggle_split).pack(side=tk.LEFT)
         
-        ttk.Label(split_frame, text="Val %:").pack(side=tk.LEFT, padx=(20, 5))
-        self.val_percent_var = tk.StringVar(value="20")
-        self.val_percent_entry = ttk.Entry(split_frame, textvariable=self.val_percent_var, 
+        # Split percentages
+        split_percent_frame = ttk.Frame(options_frame)
+        split_percent_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(split_percent_frame, text="Val %:").pack(side=tk.LEFT, padx=(20, 5))
+        self.val_percent_var = tk.StringVar(value="15")
+        self.val_percent_entry = ttk.Entry(split_percent_frame, textvariable=self.val_percent_var, 
                                            width=5, state='disabled')
         self.val_percent_entry.pack(side=tk.LEFT)
+        
+        ttk.Label(split_percent_frame, text="Test %:").pack(side=tk.LEFT, padx=(20, 5))
+        self.test_percent_var = tk.StringVar(value="15")
+        self.test_percent_entry = ttk.Entry(split_percent_frame, textvariable=self.test_percent_var, 
+                                            width=5, state='disabled')
+        self.test_percent_entry.pack(side=tk.LEFT)
+        
+        ttk.Label(split_percent_frame, text="(Train: auto)", 
+                 font=('Arial', 8, 'italic')).pack(side=tk.LEFT, padx=(10, 0))
         
         # Random seed option
         seed_frame = ttk.Frame(options_frame)
@@ -167,11 +180,13 @@ class DatasetOrganizer:
             self.log(f"Output directory: {directory}")
     
     def toggle_split(self):
-        """Toggle train/val split option"""
+        """Toggle train/val/test split option"""
         if self.split_var.get():
             self.val_percent_entry.config(state='normal')
+            self.test_percent_entry.config(state='normal')
         else:
             self.val_percent_entry.config(state='disabled')
+            self.test_percent_entry.config(state='disabled')
     
     def toggle_seed(self):
         """Toggle random seed option"""
@@ -272,7 +287,10 @@ class DatasetOrganizer:
         msg = f"Organize {len(self.image_label_pairs)} pairs to:\n{self.output_dir}\n\n"
         msg += f"Mode: {self.copy_mode_var.get().upper()}\n"
         if self.split_var.get():
-            msg += f"Split: train/val ({100-int(self.val_percent_var.get())}%/{self.val_percent_var.get()}%)"
+            val_pct = int(self.val_percent_var.get())
+            test_pct = int(self.test_percent_var.get())
+            train_pct = 100 - val_pct - test_pct
+            msg += f"Split: train/val/test ({train_pct}%/{val_pct}%/{test_pct}%)"
         else:
             msg += "Split: No (all in one folder)"
         
@@ -288,22 +306,34 @@ class DatasetOrganizer:
             output_path = Path(self.output_dir)
             
             if self.split_var.get():
-                # Train/val split
+                # Train/val/test split
                 val_percent = int(self.val_percent_var.get())
-                if val_percent < 0 or val_percent > 50:
-                    messagebox.showerror("Error", "Validation percentage must be between 0 and 50")
+                test_percent = int(self.test_percent_var.get())
+                
+                # Validate percentages
+                if val_percent < 0 or test_percent < 0:
+                    messagebox.showerror("Error", "Percentages must be positive")
                     return
+                if val_percent + test_percent >= 100:
+                    messagebox.showerror("Error", "Val% + Test% must be less than 100%")
+                    return
+                
+                train_percent = 100 - val_percent - test_percent
                 
                 # Create directories
                 train_img_dir = output_path / 'images' / 'train'
                 train_label_dir = output_path / 'labels' / 'train'
                 val_img_dir = output_path / 'images' / 'val'
                 val_label_dir = output_path / 'labels' / 'val'
+                test_img_dir = output_path / 'images' / 'test'
+                test_label_dir = output_path / 'labels' / 'test'
                 
                 train_img_dir.mkdir(parents=True, exist_ok=True)
                 train_label_dir.mkdir(parents=True, exist_ok=True)
                 val_img_dir.mkdir(parents=True, exist_ok=True)
                 val_label_dir.mkdir(parents=True, exist_ok=True)
+                test_img_dir.mkdir(parents=True, exist_ok=True)
+                test_label_dir.mkdir(parents=True, exist_ok=True)
                 
                 # Split data with random shuffling
                 import random
@@ -326,19 +356,25 @@ class DatasetOrganizer:
                 random.shuffle(self.image_label_pairs)
                 self.log(f"Shuffled {len(self.image_label_pairs)} pairs randomly")
                 
-                # Split into train/val
-                split_idx = int(len(self.image_label_pairs) * (1 - val_percent / 100))
-                train_pairs = self.image_label_pairs[:split_idx]
-                val_pairs = self.image_label_pairs[split_idx:]
+                # Split into train/val/test
+                total = len(self.image_label_pairs)
+                train_end = int(total * train_percent / 100)
+                val_end = train_end + int(total * val_percent / 100)
                 
-                self.log(f"Split ratio: {100-val_percent}% train / {val_percent}% val")
+                train_pairs = self.image_label_pairs[:train_end]
+                val_pairs = self.image_label_pairs[train_end:val_end]
+                test_pairs = self.image_label_pairs[val_end:]
+                
+                self.log(f"Split ratio: {train_percent}% train / {val_percent}% val / {test_percent}% test")
                 
                 # Copy/move files
                 self.process_pairs(train_pairs, train_img_dir, train_label_dir, "train")
                 self.process_pairs(val_pairs, val_img_dir, val_label_dir, "val")
+                self.process_pairs(test_pairs, test_img_dir, test_label_dir, "test")
                 
-                self.log(f"\nTrain set: {len(train_pairs)} pairs")
-                self.log(f"Val set: {len(val_pairs)} pairs")
+                self.log(f"\nTrain set: {len(train_pairs)} pairs ({train_percent}%)")
+                self.log(f"Val set: {len(val_pairs)} pairs ({val_percent}%)")
+                self.log(f"Test set: {len(test_pairs)} pairs ({test_percent}%)")
                 
             else:
                 # No split - all in one folder
@@ -407,6 +443,13 @@ class DatasetOrganizer:
     
     def save_metadata(self, output_path):
         """Save organization metadata"""
+        if self.split_var.get():
+            val_pct = int(self.val_percent_var.get())
+            test_pct = int(self.test_percent_var.get())
+            train_pct = 100 - val_pct - test_pct
+        else:
+            val_pct = test_pct = train_pct = 0
+        
         metadata = {
             'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'source_directory': self.source_dir,
@@ -417,7 +460,9 @@ class DatasetOrganizer:
             'mode': self.copy_mode_var.get(),
             'split': self.split_var.get(),
             'split_method': 'random_shuffle',
-            'val_percent': int(self.val_percent_var.get()) if self.split_var.get() else 0,
+            'train_percent': train_pct,
+            'val_percent': val_pct,
+            'test_percent': test_pct,
             'random_seed': int(self.seed_var.get()) if self.use_seed_var.get() else None,
             'reproducible': self.use_seed_var.get()
         }

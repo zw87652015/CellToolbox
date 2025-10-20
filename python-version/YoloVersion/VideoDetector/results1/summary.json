@@ -1,0 +1,63 @@
+{
+  "video_path": "d:\\Documents\\Recordings\\251020112157.mp4",
+  "timestamp": "2025-10-20T23:57:22.929026",
+  "config": {
+    "model": {
+      "size": "n",
+      "custom_weights": "../StaticImage/trained_models/cell_detection_v2/weights/best.pt",
+      "confidence_threshold": 0.25,
+      "iou_threshold": 0.45
+    },
+    "detection": {
+      "image_size": 640,
+      "device": "cuda",
+      "half_precision": true,
+      "max_detections": 300
+    },
+    "video": {
+      "display_width": 1280,
+      "display_height": 720,
+      "save_annotated": true,
+      "save_statistics": true,
+      "show_fps": true,
+      "show_count": true
+    },
+    "filters": {
+      "min_cell_size": 40,
+      "max_cell_size": 500,
+      "min_aspect_ratio": 0.5,
+      "max_aspect_ratio": 2.0
+    },
+    "visualization": {
+      "box_color": [
+        0,
+        255,
+        0
+      ],
+      "box_thickness": 2,
+      "text_color": [
+        255,
+        255,
+        255
+      ],
+      "text_scale": 0.6,
+      "roi_color": [
+        255,
+        0,
+        0
+      ],
+      "roi_thickness": 2,
+      "roi_dim_factor": 0.4
+    }
+  },
+  "roi_benchmark": {
+    "best_fps": 98.3265997544123,
+    "worst_fps": 44.91449302987015,
+    "full_frame_fps": 44.91449302987015
+  },
+  "image_size_benchmark": {
+    "320": 84.35573901252613,
+    "1280": 59.44239310144071,
+    "640": 75.89445464178387
+  }
+}

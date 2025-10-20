@@ -47,7 +47,13 @@ class CellModelTrainer:
                 raise ValueError(f"Missing required field in dataset.yaml: {field}")
         
         # Verify directories exist
+        # If path is relative, resolve it relative to the yaml file location
+        yaml_dir = Path(self.dataset_yaml).parent
         base_path = Path(config['path'])
+        if not base_path.is_absolute():
+            base_path = yaml_dir / base_path
+        base_path = base_path.resolve()
+        
         train_path = base_path / config['train']
         val_path = base_path / config['val']
         

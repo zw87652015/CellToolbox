@@ -1,0 +1,16 @@
+{
+  "timestamp": "2025-10-20 22:05:54",
+  "source_directory": "E:/Documents/Codes/Matlab/CellToolbox/python-version/YoloVersion/DatasetGetter/saved",
+  "output_directory": "E:\\Documents\\Codes\\Matlab\\CellToolbox\\python-version\\YoloVersion\\DatasetGetter\\Data-v2",
+  "total_pairs": 772,
+  "orphan_images": 772,
+  "orphan_labels": 0,
+  "mode": "copy",
+  "split": true,
+  "split_method": "random_shuffle",
+  "train_percent": 70,
+  "val_percent": 15,
+  "test_percent": 15,
+  "random_seed": null,
+  "reproducible": false
+}

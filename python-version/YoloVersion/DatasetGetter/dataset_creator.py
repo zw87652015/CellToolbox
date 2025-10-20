@@ -261,9 +261,6 @@ class DatasetCreatorApp:
         self.image = None
         self.image_path = None
         self.display_image = None
-        self.roi_rect = None
-        self.roi_start = None
-        self.roi_end = None
         self.detected_cells = []
         self.display_scale = 1.0
         self.display_offset_x = 0
@@ -293,6 +290,15 @@ class DatasetCreatorApp:
         self.box_start = None
         self.selected_box_index = -1
         self.selected_cell_index = -1
+        
+        # Previous frame boxes (for video sequences)
+        self.previous_detected_cells = []
+        self.previous_manual_boxes = []
+        self.copy_from_previous = False  # Flag for Q key press
+        self.group_drag_mode = False
+        self.group_drag_start = None
+        self.group_offset_x = 0
+        self.group_offset_y = 0
         
         # Zoom functionality
         self.zoom_level = 1.0
@@ -336,6 +342,8 @@ class DatasetCreatorApp:
         self.root.bind("<S>", lambda e: self.save_yolo_labels())
         self.root.bind("<r>", lambda e: self.detect_cells_whole_image())  # R = detect cells
         self.root.bind("<R>", lambda e: self.detect_cells_whole_image())
+        self.root.bind("<q>", lambda e: self.copy_previous_boxes())  # Q = copy from previous
+        self.root.bind("<Q>", lambda e: self.copy_previous_boxes())
         self.root.bind("<Right>", lambda e: self.load_next_image())
         self.root.bind("<Left>", lambda e: self.load_previous_image())
         self.root.bind("<d>", lambda e: self.load_next_image())  # D = next image
@@ -345,6 +353,8 @@ class DatasetCreatorApp:
         self.root.bind("<Delete>", lambda e: self.delete_selected_box())  # Delete = delete box
         self.root.bind("<m>", lambda e: self.toggle_manual_mode())
         self.root.bind("<M>", lambda e: self.toggle_manual_mode())
+        self.root.bind("<e>", lambda e: self.toggle_group_drag_mode())  # E = toggle group drag
+        self.root.bind("<E>", lambda e: self.toggle_group_drag_mode())
         self.root.bind("<plus>", lambda e: self.zoom_in())
         self.root.bind("<equal>", lambda e: self.zoom_in())  # + without shift
         self.root.bind("<minus>", lambda e: self.zoom_out())
@@ -354,8 +364,7 @@ class DatasetCreatorApp:
         ttk.Label(control_frame, text="YOLO Dataset Creator", font=('Arial', 12, 'bold')).pack(pady=10)
         
         ttk.Button(control_frame, text="Load Image", command=self.load_image).pack(fill=tk.X, pady=5)
-        ttk.Button(control_frame, text="Detect Cells (ROI)", command=self.detect_cells).pack(fill=tk.X, pady=5)
-        ttk.Button(control_frame, text="Detect Cells (Whole Image)", command=self.detect_cells_whole_image).pack(fill=tk.X, pady=5)
+        ttk.Button(control_frame, text="Detect Cells", command=self.detect_cells_whole_image).pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Save YOLO Labels", command=self.save_yolo_labels).pack(fill=tk.X, pady=5)
         
         ttk.Separator(control_frame, orient='horizontal').pack(fill=tk.X, pady=5)
@@ -363,11 +372,15 @@ class DatasetCreatorApp:
         # Manual labeling controls
         self.manual_mode_btn = ttk.Button(control_frame, text="Manual Mode: OFF", command=self.toggle_manual_mode)
         self.manual_mode_btn.pack(fill=tk.X, pady=5)
+        
+        # Group drag mode button
+        self.group_drag_btn = ttk.Button(control_frame, text="Group Drag: OFF", command=self.toggle_group_drag_mode)
+        self.group_drag_btn.pack(fill=tk.X, pady=5)
+        
         ttk.Button(control_frame, text="Clear All Labels", command=self.clear_all_labels).pack(fill=tk.X, pady=5)
         
         ttk.Separator(control_frame, orient='horizontal').pack(fill=tk.X, pady=5)
         ttk.Button(control_frame, text="Batch Process Folder", command=self.batch_process_folder).pack(fill=tk.X, pady=5)
-        ttk.Button(control_frame, text="Clear ROI", command=self.clear_roi).pack(fill=tk.X, pady=5)
         
         # Parameters
         ttk.Separator(control_frame, orient='horizontal').pack(fill=tk.X, pady=10)
@@ -375,7 +388,7 @@ class DatasetCreatorApp:
         
         # Bounding box expansion ratio
         ttk.Label(control_frame, text="BBox Expansion (%):").pack(anchor=tk.W, padx=5, pady=(10,0))
-        self.margin_var = tk.StringVar(value="10")
+        self.margin_var = tk.StringVar(value="30")
         margin_frame = ttk.Frame(control_frame)
         margin_frame.pack(fill=tk.X, padx=5, pady=(0,5))
         ttk.Entry(margin_frame, textvariable=self.margin_var, width=10).pack(side=tk.LEFT, padx=(0,5))
@@ -383,14 +396,14 @@ class DatasetCreatorApp:
         
         # Size filter
         ttk.Label(control_frame, text="Min Cell Size (pixels):").pack(anchor=tk.W, padx=5, pady=(10,0))
-        self.min_size_var = tk.StringVar(value="20")
+        self.min_size_var = tk.StringVar(value="40")
         min_size_frame = ttk.Frame(control_frame)
         min_size_frame.pack(fill=tk.X, padx=5, pady=(0,5))
         ttk.Entry(min_size_frame, textvariable=self.min_size_var, width=10).pack(side=tk.LEFT, padx=(0,5))
         ttk.Label(min_size_frame, text="bbox width/height").pack(side=tk.LEFT)
         
         ttk.Label(control_frame, text="Max Cell Size (pixels):").pack(anchor=tk.W, padx=5, pady=(5,0))
-        self.max_size_var = tk.StringVar(value="200")
+        self.max_size_var = tk.StringVar(value="500")
         max_size_frame = ttk.Frame(control_frame)
         max_size_frame.pack(fill=tk.X, padx=5, pady=(0,5))
         ttk.Entry(max_size_frame, textvariable=self.max_size_var, width=10).pack(side=tk.LEFT, padx=(0,5))
@@ -469,19 +482,28 @@ class DatasetCreatorApp:
         # Create display image
         display_img = self.image.copy()
         
-        # Draw ROI rectangle
-        if self.roi_rect:
-            x, y, rw, rh = self.roi_rect
-            cv2.rectangle(display_img, (x, y), (x+rw, y+rh), (0, 255, 0), 2)
-        
         # Draw detected cells
         for i, cell in enumerate(self.detected_cells):
             cx, cy = cell.center
             bx, by, bw, bh = cell.bbox
             
-            # Highlight selected cell
-            color = (255, 255, 0) if i == self.selected_cell_index else (255, 0, 0)  # Yellow if selected, blue otherwise
-            thickness = 3 if i == self.selected_cell_index else 2
+            # Apply group offset if in group drag mode
+            if self.group_drag_mode:
+                bx += self.group_offset_x
+                by += self.group_offset_y
+                cx += self.group_offset_x
+                cy += self.group_offset_y
+            
+            # Highlight selected cell or group drag mode
+            if self.group_drag_mode:
+                color = (255, 165, 0)  # Orange for group drag
+                thickness = 3
+            elif i == self.selected_cell_index:
+                color = (255, 255, 0)  # Yellow if selected
+                thickness = 3
+            else:
+                color = (255, 0, 0)  # Blue otherwise
+                thickness = 2
             
             # Draw bounding box
             cv2.rectangle(display_img, (bx, by), (bx+bw, by+bh), color, thickness)
@@ -495,9 +517,22 @@ class DatasetCreatorApp:
         
         # Draw manual boxes
         for i, (bx, by, bw, bh) in enumerate(self.manual_boxes):
-            # Highlight selected box
-            color = (255, 255, 0) if i == self.selected_box_index else (0, 255, 255)  # Yellow if selected, cyan otherwise
-            thickness = 3 if i == self.selected_box_index else 2
+            # Apply group offset if in group drag mode
+            if self.group_drag_mode:
+                bx += self.group_offset_x
+                by += self.group_offset_y
+            
+            # Highlight selected box or group drag mode
+            if self.group_drag_mode:
+                color = (255, 165, 0)  # Orange for group drag
+                thickness = 3
+            elif i == self.selected_box_index:
+                color = (255, 255, 0)  # Yellow if selected
+                thickness = 3
+            else:
+                color = (0, 255, 255)  # Cyan otherwise
+                thickness = 2
+            
             cv2.rectangle(display_img, (bx, by), (bx+bw, by+bh), color, thickness)
             
             # Draw label
@@ -533,12 +568,39 @@ class DatasetCreatorApp:
         img_x = int((event.x - self.display_offset_x) / self.display_scale)
         img_y = int((event.y - self.display_offset_y) / self.display_scale)
         
+        # Group drag mode - check if clicking inside any box
+        if self.copy_from_previous:
+            # Check if clicking inside any manual box
+            for i, (bx, by, bw, bh) in enumerate(self.manual_boxes):
+                if bx <= img_x <= bx + bw and by <= img_y <= by + bh:
+                    self.group_drag_mode = True
+                    self.group_drag_start = (img_x, img_y)
+                    self.group_offset_x = 0
+                    self.group_offset_y = 0
+                    self.update_info(f"Group drag started from box {i+1}")
+                    return
+            
+            # Check if clicking inside any detected cell
+            for i, cell in enumerate(self.detected_cells):
+                bx, by, bw, bh = cell.bbox
+                if bx <= img_x <= bx + bw and by <= img_y <= by + bh:
+                    self.group_drag_mode = True
+                    self.group_drag_start = (img_x, img_y)
+                    self.group_offset_x = 0
+                    self.group_offset_y = 0
+                    self.update_info(f"Group drag started from cell {i+1}")
+                    return
+            
+            # Clicked outside all boxes - show message
+            self.update_info("Click inside a box to start group drag")
+            return
+        
         if self.manual_mode:
-            # Manual mode: check if clicking on existing manual box
+            # Check if clicking on existing box to select it
             self.selected_box_index = -1
             self.selected_cell_index = -1
             
-            # Check manual boxes first
+            # Check manual boxes
             for i, (bx, by, bw, bh) in enumerate(self.manual_boxes):
                 if bx <= img_x <= bx + bw and by <= img_y <= by + bh:
                     self.selected_box_index = i
@@ -558,10 +620,6 @@ class DatasetCreatorApp:
             # Start drawing new box
             self.drawing_box = True
             self.box_start = (img_x, img_y)
-        else:
-            # ROI mode
-            self.roi_start = (img_x, img_y)
-            self.roi_end = None
     
     def on_mouse_move(self, event):
         """Handle mouse movement"""
@@ -572,6 +630,14 @@ class DatasetCreatorApp:
         img_x = int((event.x - self.display_offset_x) / self.display_scale)
         img_y = int((event.y - self.display_offset_y) / self.display_scale)
         
+        # Group drag mode (works regardless of manual mode)
+        if self.group_drag_mode and self.group_drag_start:
+            # Calculate offset from drag start
+            self.group_offset_x = img_x - self.group_drag_start[0]
+            self.group_offset_y = img_y - self.group_drag_start[1]
+            self.update_display()
+            return
+        
         if self.manual_mode and self.drawing_box and self.box_start:
             # Draw temporary box
             self.update_display()
@@ -580,18 +646,6 @@ class DatasetCreatorApp:
             x2 = int(img_x * self.display_scale) + self.display_offset_x
             y2 = int(img_y * self.display_scale) + self.display_offset_y
             self.canvas.create_rectangle(x1, y1, x2, y2, outline='cyan', width=2, tags='temp_box')
-        elif not self.manual_mode and self.roi_start:
-            # ROI mode
-            self.roi_end = (img_x, img_y)
-            self.update_display()
-            
-            # Draw temporary rectangle
-            if self.roi_start and self.roi_end:
-                x1 = int(self.roi_start[0] * self.display_scale) + self.display_offset_x
-                y1 = int(self.roi_start[1] * self.display_scale) + self.display_offset_y
-                x2 = int(self.roi_end[0] * self.display_scale) + self.display_offset_x
-                y2 = int(self.roi_end[1] * self.display_scale) + self.display_offset_y
-                self.canvas.create_rectangle(x1, y1, x2, y2, outline='yellow', width=2, tags='temp_roi')
     
     def on_mouse_up(self, event):
         """Handle mouse button release"""
@@ -601,6 +655,20 @@ class DatasetCreatorApp:
         # Convert display to image coordinates
         img_x = int((event.x - self.display_offset_x) / self.display_scale)
         img_y = int((event.y - self.display_offset_y) / self.display_scale)
+        
+        # Finalize group drag (works regardless of manual mode)
+        if self.group_drag_mode:
+            # Apply offset to all boxes
+            self.apply_group_offset()
+            self.group_drag_mode = False
+            self.group_drag_start = None
+            # Keep copy_from_previous enabled for multiple drags
+            self.update_info(f"Boxes shifted by ({self.group_offset_x}, {self.group_offset_y})")
+            self.update_info("Group drag mode still active - click any box to drag again")
+            self.group_offset_x = 0
+            self.group_offset_y = 0
+            self.update_display()
+            return
         
         if self.manual_mode and self.drawing_box and self.box_start:
             # Finish drawing manual box
@@ -627,78 +695,7 @@ class DatasetCreatorApp:
             self.drawing_box = False
             self.box_start = None
             self.update_display()
-        elif not self.manual_mode and self.roi_start:
-            # ROI mode
-            self.roi_end = (img_x, img_y)
-            
-            # Calculate ROI rectangle
-            x1, y1 = self.roi_start
-            x2, y2 = self.roi_end
-            
-            x = min(x1, x2)
-            y = min(y1, y2)
-            w = abs(x2 - x1)
-            h = abs(y2 - y1)
-            
-            # Clamp to image bounds
-            img_h, img_w = self.image.shape[:2]
-            x = max(0, min(x, img_w))
-            y = max(0, min(y, img_h))
-            w = min(w, img_w - x)
-            h = min(h, img_h - y)
-            
-            if w > 10 and h > 10:
-                self.roi_rect = (x, y, w, h)
-                self.update_info(f"ROI set: {w}x{h} at ({x}, {y})")
-            
-            self.roi_start = None
-            self.roi_end = None
-            self.update_display()
     
-    def detect_cells(self):
-        """Detect cells in the ROI"""
-        if self.image is None:
-            messagebox.showwarning("Warning", "Please load an image first")
-            return
-        
-        if self.roi_rect is None:
-            messagebox.showwarning("Warning", "Please draw an ROI first")
-            return
-        
-        # Parse and validate size filter
-        try:
-            min_size = int(self.min_size_var.get())
-            max_size = int(self.max_size_var.get())
-            if min_size < 1 or max_size < min_size:
-                messagebox.showerror("Error", "Invalid size filter. Min must be >= 1 and Max must be >= Min")
-                return
-        except ValueError:
-            messagebox.showerror("Error", "Invalid size values. Please enter integers")
-            return
-        
-        self.status_var.set("Detecting cells...")
-        self.root.update()
-        
-        # Detect all cells
-        all_cells = detect_cells_in_roi(self.image, self.roi_rect, self.params)
-        
-        # Apply size filter
-        self.detected_cells = []
-        filtered_count = 0
-        for cell in all_cells:
-            bx, by, bw, bh = cell.bbox
-            # Filter by both width and height
-            if min_size <= bw <= max_size and min_size <= bh <= max_size:
-                self.detected_cells.append(cell)
-            else:
-                filtered_count += 1
-        
-        self.update_display()
-        info_msg = f"Detected {len(self.detected_cells)} cells"
-        if filtered_count > 0:
-            info_msg += f" ({filtered_count} filtered by size)"
-        self.update_info(info_msg)
-        self.status_var.set(f"Detected {len(self.detected_cells)} cells")
     
     def save_yolo_labels(self):
         """Save YOLO format labels for detected cells and manual boxes"""
@@ -743,16 +740,31 @@ class DatasetCreatorApp:
             expansion_w = int(bw * expansion_ratio)
             expansion_h = int(bh * expansion_ratio)
             
-            expanded_x = max(0, bx - expansion_w)
-            expanded_y = max(0, by - expansion_h)
-            expanded_w = min(img_width - expanded_x, bw + 2*expansion_w)
-            expanded_h = min(img_height - expanded_y, bh + 2*expansion_h)
+            # Calculate expanded box (can go outside image)
+            expanded_x = bx - expansion_w
+            expanded_y = by - expansion_h
+            expanded_w = bw + 2*expansion_w
+            expanded_h = bh + 2*expansion_h
+            
+            # Clip to image boundaries (cut the box, don't move it)
+            clipped_x1 = max(0, expanded_x)
+            clipped_y1 = max(0, expanded_y)
+            clipped_x2 = min(img_width, expanded_x + expanded_w)
+            clipped_y2 = min(img_height, expanded_y + expanded_h)
+            
+            # Calculate clipped dimensions
+            clipped_w = clipped_x2 - clipped_x1
+            clipped_h = clipped_y2 - clipped_y1
+            
+            # Skip if box is completely outside image
+            if clipped_w <= 0 or clipped_h <= 0:
+                continue
             
             # Calculate YOLO format (normalized center_x, center_y, width, height)
-            center_x = (expanded_x + expanded_w / 2) / img_width
-            center_y = (expanded_y + expanded_h / 2) / img_height
-            norm_width = expanded_w / img_width
-            norm_height = expanded_h / img_height
+            center_x = (clipped_x1 + clipped_w / 2) / img_width
+            center_y = (clipped_y1 + clipped_h / 2) / img_height
+            norm_width = clipped_w / img_width
+            norm_height = clipped_h / img_height
             
             yolo_labels.append(f"0 {center_x:.6f} {center_y:.6f} {norm_width:.6f} {norm_height:.6f}")
         
@@ -762,16 +774,31 @@ class DatasetCreatorApp:
             expansion_w = int(bw * expansion_ratio)
             expansion_h = int(bh * expansion_ratio)
             
-            expanded_x = max(0, bx - expansion_w)
-            expanded_y = max(0, by - expansion_h)
-            expanded_w = min(img_width - expanded_x, bw + 2*expansion_w)
-            expanded_h = min(img_height - expanded_y, bh + 2*expansion_h)
+            # Calculate expanded box (can go outside image)
+            expanded_x = bx - expansion_w
+            expanded_y = by - expansion_h
+            expanded_w = bw + 2*expansion_w
+            expanded_h = bh + 2*expansion_h
+            
+            # Clip to image boundaries (cut the box, don't move it)
+            clipped_x1 = max(0, expanded_x)
+            clipped_y1 = max(0, expanded_y)
+            clipped_x2 = min(img_width, expanded_x + expanded_w)
+            clipped_y2 = min(img_height, expanded_y + expanded_h)
+            
+            # Calculate clipped dimensions
+            clipped_w = clipped_x2 - clipped_x1
+            clipped_h = clipped_y2 - clipped_y1
+            
+            # Skip if box is completely outside image
+            if clipped_w <= 0 or clipped_h <= 0:
+                continue
             
             # Calculate YOLO format
-            center_x = (expanded_x + expanded_w / 2) / img_width
-            center_y = (expanded_y + expanded_h / 2) / img_height
-            norm_width = expanded_w / img_width
-            norm_height = expanded_h / img_height
+            center_x = (clipped_x1 + clipped_w / 2) / img_width
+            center_y = (clipped_y1 + clipped_h / 2) / img_height
+            norm_width = clipped_w / img_width
+            norm_height = clipped_h / img_height
             
             # YOLO format: class_id center_x center_y width height
             # class_id = 0 for "cell"
@@ -1066,12 +1093,6 @@ class DatasetCreatorApp:
         except:
             pass
     
-    def clear_roi(self):
-        """Clear the ROI and detected cells"""
-        self.roi_rect = None
-        self.detected_cells = []
-        self.update_display()
-        self.update_info("ROI cleared")
     
     def update_info(self, message):
         """Update info text"""
@@ -1083,6 +1104,10 @@ class DatasetCreatorApp:
         if not self.folder_images or self.current_image_index < 0:
             self.update_info("No folder loaded. Load an image first.")
             return
+        
+        # Save current boxes as previous (for Q key functionality)
+        self.previous_detected_cells = self.detected_cells.copy()
+        self.previous_manual_boxes = self.manual_boxes.copy()
         
         # Move to next image
         next_index = (self.current_image_index + 1) % len(self.folder_images)
@@ -1096,11 +1121,12 @@ class DatasetCreatorApp:
         
         self.image_path = next_path
         self.current_image_index = next_index
-        self.roi_rect = None
         self.detected_cells = []
         self.manual_boxes = []  # Clear manual boxes when changing images
         self.selected_box_index = -1
         self.selected_cell_index = -1
+        self.copy_from_previous = False  # Reset Q flag
+        self.group_drag_btn.config(text="Group Drag: OFF")  # Reset button
         
         self.update_display()
         nav_info = f"[{self.current_image_index + 1}/{len(self.folder_images)}]"
@@ -1112,6 +1138,10 @@ class DatasetCreatorApp:
         if not self.folder_images or self.current_image_index < 0:
             self.update_info("No folder loaded. Load an image first.")
             return
+        
+        # Save current boxes as previous (for Q key functionality)
+        self.previous_detected_cells = self.detected_cells.copy()
+        self.previous_manual_boxes = self.manual_boxes.copy()
         
         # Move to previous image
         prev_index = (self.current_image_index - 1) % len(self.folder_images)
@@ -1125,11 +1155,12 @@ class DatasetCreatorApp:
         
         self.image_path = prev_path
         self.current_image_index = prev_index
-        self.roi_rect = None
         self.detected_cells = []
         self.manual_boxes = []  # Clear manual boxes when changing images
         self.selected_box_index = -1
         self.selected_cell_index = -1
+        self.copy_from_previous = False  # Reset Q flag
+        self.group_drag_btn.config(text="Group Drag: OFF")  # Reset button
         
         self.update_display()
         nav_info = f"[{self.current_image_index + 1}/{len(self.folder_images)}]"
@@ -1137,23 +1168,131 @@ class DatasetCreatorApp:
         self.update_info(f"← Previous image {nav_info}: {self.folder_images[prev_index]}")
     
     def toggle_manual_mode(self):
-        """Toggle between manual labeling mode and ROI mode"""
+        """Toggle manual labeling mode"""
         self.manual_mode = not self.manual_mode
         
         if self.manual_mode:
             self.manual_mode_btn.config(text="Manual Mode: ON")
             self.update_info("=== Manual Mode ON ===")
             self.update_info("Draw boxes: Click and drag")
-            self.update_info("Delete box: Click box, press D or Delete")
+            self.update_info("Delete box: Click box, press Delete")
             self.update_info("Save: Press S")
             self.status_var.set("Manual Mode: Draw bounding boxes")
         else:
             self.manual_mode_btn.config(text="Manual Mode: OFF")
             self.update_info("=== Manual Mode OFF ===")
-            self.update_info("ROI mode active")
-            self.status_var.set("ROI Mode: Draw ROI for detection")
+            self.status_var.set("Manual Mode OFF")
         
         self.update_display()
+    
+    def toggle_group_drag_mode(self):
+        """Toggle group drag mode on/off"""
+        if not self.detected_cells and not self.manual_boxes:
+            messagebox.showwarning("Warning", "No boxes to drag. Detect cells or draw boxes first.")
+            return
+        
+        self.copy_from_previous = not self.copy_from_previous
+        
+        if self.copy_from_previous:
+            # Enable group drag mode
+            self.group_drag_btn.config(text="Group Drag: ON")
+            
+            total_boxes = len(self.detected_cells) + len(self.manual_boxes)
+            self.update_info("=== Group Drag Mode ON ===")
+            self.update_info(f"Total boxes: {total_boxes}")
+            self.update_info("Click inside any box and drag to shift all boxes together")
+            self.update_info("Drag multiple times - mode stays active until toggled off")
+            self.status_var.set(f"Group drag mode: Click any box to drag {total_boxes} boxes")
+        else:
+            # Disable group drag mode
+            self.group_drag_btn.config(text="Group Drag: OFF")
+            self.update_info("=== Group Drag Mode OFF ===")
+            self.status_var.set("Group drag mode disabled")
+        
+        self.update_display()
+    
+    def copy_previous_boxes(self):
+        """Copy boxes from previous image (Q key) - for video sequences"""
+        if self.image is None:
+            self.update_info("No image loaded")
+            return
+        
+        if not self.previous_detected_cells and not self.previous_manual_boxes:
+            self.update_info("No previous boxes to copy. Navigate to next image first.")
+            return
+        
+        # Copy boxes from previous frame
+        self.detected_cells = self.previous_detected_cells.copy()
+        self.manual_boxes = self.previous_manual_boxes.copy()
+        
+        # Enable group drag mode via button
+        self.copy_from_previous = True
+        self.group_drag_btn.config(text="Group Drag: ON")
+        
+        total_boxes = len(self.detected_cells) + len(self.manual_boxes)
+        self.update_info(f"=== Copied {total_boxes} boxes from previous image ===")
+        self.update_info(f"  Auto-detected: {len(self.detected_cells)}")
+        self.update_info(f"  Manual boxes: {len(self.manual_boxes)}")
+        self.update_info("Group drag mode enabled - click any box to drag all")
+        self.status_var.set(f"Group drag mode: Click any box to drag {total_boxes} boxes")
+        
+        self.update_display()
+    
+    def apply_group_offset(self):
+        """Apply the group drag offset to all boxes, filtering out boxes at margins"""
+        if self.group_offset_x == 0 and self.group_offset_y == 0:
+            return
+        
+        if self.image is None:
+            return
+        
+        img_height, img_width = self.image.shape[:2]
+        margin_threshold = 10  # pixels from edge to consider as margin
+        
+        # Apply offset to detected cells and filter
+        filtered_cells = []
+        removed_count = 0
+        for cell in self.detected_cells:
+            bx, by, bw, bh = cell.bbox
+            new_bx = bx + self.group_offset_x
+            new_by = by + self.group_offset_y
+            
+            # Check if box center is too close to margins or outside
+            center_x = new_bx + bw / 2
+            center_y = new_by + bh / 2
+            
+            # Keep box if center is well inside image (not at margins)
+            if (margin_threshold <= center_x <= img_width - margin_threshold and
+                margin_threshold <= center_y <= img_height - margin_threshold):
+                cell.bbox = (new_bx, new_by, bw, bh)
+                cell.center = (center_x, center_y)
+                filtered_cells.append(cell)
+            else:
+                removed_count += 1
+        
+        self.detected_cells = filtered_cells
+        
+        # Apply offset to manual boxes and filter
+        new_manual_boxes = []
+        for bx, by, bw, bh in self.manual_boxes:
+            new_bx = bx + self.group_offset_x
+            new_by = by + self.group_offset_y
+            
+            # Check if box center is too close to margins or outside
+            center_x = new_bx + bw / 2
+            center_y = new_by + bh / 2
+            
+            # Keep box if center is well inside image (not at margins)
+            if (margin_threshold <= center_x <= img_width - margin_threshold and
+                margin_threshold <= center_y <= img_height - margin_threshold):
+                new_manual_boxes.append((new_bx, new_by, bw, bh))
+            else:
+                removed_count += 1
+        
+        self.manual_boxes = new_manual_boxes
+        
+        if removed_count > 0:
+            self.update_info(f"Removed {removed_count} boxes at margins/outside image")
     
     def delete_selected_box(self):
         """Delete the currently selected manual box or detected cell"""

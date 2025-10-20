@@ -1,0 +1,17 @@
+# Real-Time Video Cell Detector Requirements
+
+# Core dependencies
+ultralytics>=8.0.0  # YOLO11
+opencv-python>=4.8.0  # Video processing and visualization
+numpy>=1.24.0  # Numerical operations
+pandas>=2.0.0  # Data handling and CSV export
+pyyaml>=6.0  # Configuration files
+
+# Optional but recommended
+torch>=2.0.0  # PyTorch (required by ultralytics)
+torchvision>=0.15.0  # Vision utilities
+
+# For GPU acceleration (optional)
+# Install CUDA-enabled PyTorch:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118  # CUDA 11.8
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121  # CUDA 12.1
