@@ -1,0 +1,59 @@
+# ToupCam Live Detector Configuration
+
+# Model settings
+model:
+  # YOLO11 model size: n (nano), s (small), m (medium), l (large), x (extra large)
+  size: "n"
+  # Path to custom trained model (if available)
+  custom_weights: "e:/Documents/Codes/Matlab/CellToolbox/python-version/YoloVersion/StaticImage/trained_models/cell_detection_v2/weights/best.pt"
+  # Confidence threshold for detection
+  confidence_threshold: 0.25
+  # IoU threshold for NMS
+  iou_threshold: 0.45
+
+# Detection settings
+detection:
+  # Input image size for YOLO (640, 1280, etc.)
+  image_size: 640
+  # Device: 'cuda' for GPU, 'cpu' for CPU, or '0' for specific GPU
+  device: "cuda"
+  # Use half precision (FP16) for faster inference on GPU
+  half_precision: true
+  # Maximum number of detections per frame
+  max_detections: 300
+
+# Video/Live stream settings
+video:
+  # Display window size
+  display_width: 1280
+  display_height: 720
+  # Show FPS counter
+  show_fps: true
+  # Show cell count
+  show_count: true
+
+# Cell filtering parameters
+filters:
+  # Minimum cell size (pixels)
+  min_cell_size: 40
+  # Maximum cell size (pixels)
+  max_cell_size: 500
+  # Minimum aspect ratio (width/height)
+  min_aspect_ratio: 0.5
+  # Maximum aspect ratio (width/height)
+  max_aspect_ratio: 2.0
+
+# Visualization settings
+visualization:
+  # Bounding box color (BGR)
+  box_color: [0, 255, 0]  # Green
+  # Box line thickness
+  box_thickness: 2
+  # Text color (BGR)
+  text_color: [255, 255, 255]  # White
+  # Text scale
+  text_scale: 0.6
+  # ROI rectangle color (BGR)
+  roi_color: [255, 0, 0]  # Red
+  # ROI line thickness
+  roi_thickness: 2

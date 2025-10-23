@@ -1,0 +1,20 @@
+# ToupCam Live Detector Requirements
+
+# Core dependencies
+ultralytics>=8.0.0  # YOLO11
+opencv-python>=4.8.0  # Video processing and visualization
+numpy>=1.24.0  # Numerical operations
+pandas>=2.0.0  # Data handling
+pyyaml>=6.0  # Configuration files
+
+# PyTorch (required by ultralytics)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# For GPU acceleration (optional but recommended)
+# Install CUDA-enabled PyTorch:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118  # CUDA 11.8
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121  # CUDA 12.1
+
+# Note: ToupCam SDK is required and should be located at:
+# ../../toupcamsdk.20241216/

@@ -30,7 +30,7 @@ GetCurrentThreadId = ctypes.windll.kernel32.GetCurrentThreadId
 
 # Color constants
 WHITE = (255, 255, 255)
-BLACK = (30, 30, 30)
+BLACK = (0, 0, 0)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 YELLOW = (255, 255, 0)
@@ -645,7 +645,7 @@ def main():
     SCALE_DELAY_MAX = 3  # Only apply scalingaevery 3 frames
     
     # Colors
-    BLACK = (30, 30, 30)
+    BLACK = (0, 0, 0)
     WHITE = (255, 255, 255)
     RED = (255, 0, 0)
     GREEN = (0, 255, 0)
