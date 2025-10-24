@@ -17,7 +17,6 @@ import logging
 from datetime import datetime
 import time
 import threading
-import queue
 
 # Configure logging
 logging.basicConfig(
@@ -77,11 +76,16 @@ class ToupCamLiveDetector:
         
         # Threading
         self.frame_lock = threading.Lock()
-        self.detection_queue = queue.Queue(maxsize=2)
         self.current_frame = None
         self.display_frame = None
+        
+        # Detection synchronization - always use latest frame
+        self.latest_detection_frame = None
+        self.detection_frame_lock = threading.Lock()
         self.detections = []
         self.detection_lock = threading.Lock()
+        self.detection_frame_id = 0
+        self.displayed_frame_id = 0
         
         # Performance
         self.fps = 0
@@ -225,31 +229,31 @@ class ToupCamLiveDetector:
                 # Store reference; do not copy to minimize latency
                 self.current_frame = frame
                 self.frame_count += 1
+                current_id = self.frame_count
             
-            # Queue for detection (non-blocking), optionally subsample frames
-            if (
-                self.detection_enabled
-                and not self.paused
-                and (
-                    self.frame_count
-                    % max(1, int(self.config['detection'].get('detect_every_n_frames', 1)))
-                )
-                == 0
-            ):
-                try:
-                    # Copy once for detection to avoid data changing during inference
-                    self.detection_queue.put_nowait(frame.copy())
-                except queue.Full:
-                    pass  # Skip if queue full
+            # Update latest frame for detection (always use newest frame)
+            if self.detection_enabled and not self.paused:
+                with self.detection_frame_lock:
+                    # Always replace with latest frame - detection will grab it when ready
+                    self.latest_detection_frame = frame.copy()
+                    self.detection_frame_id = current_id
                     
         except Exception as e:
             logger.error(f"Frame error: {e}")
     
     def _detection_thread(self):
-        """Detection thread - runs independently"""
+        """Detection thread - always processes latest frame"""
         while self.running:
             try:
-                frame = self.detection_queue.get(timeout=0.1)
+                # Grab the latest frame snapshot
+                with self.detection_frame_lock:
+                    if self.latest_detection_frame is None:
+                        time.sleep(0.01)
+                        continue
+                    frame = self.latest_detection_frame
+                    frame_id = self.detection_frame_id
+                    # Clear to indicate we've consumed it
+                    self.latest_detection_frame = None
                 
                 # Apply ROI if set
                 detection_frame = self._apply_roi_mask(frame) if self.roi else frame
@@ -275,10 +279,9 @@ class ToupCamLiveDetector:
                 
                 with self.detection_lock:
                     self.detections = detections
+                    self.displayed_frame_id = frame_id  # Track which frame these detections came from
                     self.all_detections.extend(detections)
                     
-            except queue.Empty:
-                continue
             except Exception as e:
                 logger.error(f"Detection error: {e}")
     

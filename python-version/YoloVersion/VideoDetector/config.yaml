@@ -5,7 +5,7 @@ model:
   # YOLO11 model size: n (nano), s (small), m (medium), l (large), x (extra large)
   size: "n"
   # Path to custom trained model (if available)
-  custom_weights: "../StaticImage/trained_models/cell_detection_v2/weights/best.pt"
+  custom_weights: "E:\\Documents\\Codes\\Matlab\\CellToolbox\\python-version\\YoloVersion\\StaticImage\\trained_models\\cell_detection_v2\\weights\\best.pt"
   # Confidence threshold for detection
   confidence_threshold: 0.25
   # IoU threshold for NMS

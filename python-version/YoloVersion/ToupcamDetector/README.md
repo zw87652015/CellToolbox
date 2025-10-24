@@ -1,6 +1,6 @@
-# ToupCam Live Stream Cell Detector with YOLO11
+# ToupCam Single Droplet Cell Detection with YOLO11
 
-High-performance real-time cell detection using ToupCam cameras and YOLO11 deep learning.
+Real-time single droplet cell detection using ToupCam cameras and YOLOv11 deep learning. This version replaces the traditional Kirsch edge detection algorithm with YOLOv11 for improved accuracy and robustness.
 
 ## Features
 
@@ -56,65 +56,97 @@ The ToupCam SDK should be located at:
 ### Basic Usage
 
 ```bash
-python toupcam_live_detector.py
+python toupcam_single_droplet_yolo.py
 ```
 
-### With Custom Config
+The application will:
+1. Load the trained YOLO model from `../StaticImage/trained_models/cell_detection_v2/weights/best.pt`
+2. Connect to the first available ToupCam camera
+3. Display live camera feed with interactive ROI selection
+4. Project detected cells to the projector screen
 
-```bash
-python toupcam_live_detector.py --config my_config.yaml
+## UI Controls
+
+### Buttons
+- **Reconnect Camera**: Reconnect to ToupCam (useful if camera disconnected or had errors)
+- **Detect Cells**: Toggle cell detection on/off
+- **Save Cells**: Save detected cell information
+- **Clear Selection**: Clear selected cells
+- **Clear ROI**: Remove the region of interest
+- **Exposure Control**: Open exposure settings panel
+- **Capture Photo**: Save current frame as TIFF
+- **Enable Debug Mode**: Toggle debug visualization
+
+### Mouse
+- **Click and drag**: Draw ROI rectangle on camera view
+- ROI is automatically used for cell detection
+
+### Pattern Parameters
+- **Pattern/Cell Size Ratio**: Adjust the size of projected patterns relative to detected cells
+
+## YOLO Model Configuration
+
+The application uses a trained YOLOv11 model for cell detection. The model path is hardcoded in the script:
+
+```python
+YOLO_MODEL_PATH = '../StaticImage/trained_models/cell_detection_v2/weights/best.pt'
 ```
 
-## Keyboard Controls
+### Detection Parameters (in code)
+- **imgsz**: 640 (standard YOLO input size)
+- **conf**: 0.25 (confidence threshold)
+- **iou**: 0.45 (IoU threshold for NMS)
+- **device**: 'cpu' (use CPU for real-time detection)
+- **max_det**: 100 (maximum detections per image)
 
-| Key | Action |
-|-----|--------|
-| **SPACE** | Pause/Resume |
-| **Q** | Quit |
-| **D** | Toggle detection ON/OFF |
-| **R** | Clear ROI |
-| **H** | Show help |
-| **MOUSE** | Click and drag to select ROI |
+### To Use a Different Model
+Edit the `YOLO_MODEL_PATH` variable in `toupcam_single_droplet_yolo.py` to point to your custom trained model.
 
-## Configuration
+### To Adjust Detection Parameters
+Modify the `model.predict()` parameters in the `detect_cells_in_roi()` function:
+- Increase `conf` for fewer false positives
+- Decrease `conf` for more detections
+- Change `device` to 'cuda' for GPU acceleration (if available)
 
-Edit `config.yaml` to customize:
+## Key Differences from Original Version
 
-### Model Settings
-- **size**: YOLO11 model size (n/s/m/l/x)
-- **custom_weights**: Path to custom trained model
-- **confidence_threshold**: Detection confidence (0.0-1.0)
-- **iou_threshold**: NMS IoU threshold
+| Feature | Original (Kirsch) | YOLO Version |
+|---------|------------------|--------------|
+| Detection Algorithm | Kirsch edge detection + morphology | YOLOv11 + contour refinement (hybrid) |
+| Size Measurement | Contour-based (precise) | YOLO bbox + contour refinement (best of both) |
+| Accuracy | Good for clear edges | Better for various conditions |
+| Speed | Fast (pure OpenCV) | Moderate (depends on hardware) |
+| Robustness | Sensitive to lighting | More robust to variations |
+| Training | No training needed | Requires trained model |
+| Dependencies | scikit-image | ultralytics YOLO |
 
-### Detection Settings
-- **image_size**: Input size for YOLO (640 recommended)
-- **device**: 'cuda' for GPU, 'cpu' for CPU
-- **half_precision**: Use FP16 for faster GPU inference
+### Hybrid Detection Approach
 
-### Filters
-- **min/max_cell_size**: Size range in pixels
-- **min/max_aspect_ratio**: Shape constraints
+The YOLO version uses a **two-stage hybrid approach**:
 
-### Visualization
-- **box_color**: Detection box color (BGR)
-- **roi_color**: ROI rectangle color (BGR)
-- **box_thickness**: Line thickness
+1. **Stage 1 - YOLO Detection**: Robust cell localization with bounding boxes
+2. **Stage 2 - Contour Refinement**: Precise size measurement within each box
+   - Finds the most circular contour (circularity > 0.5)
+   - Calculates exact radius from contour area
+   - Falls back to YOLO approximation if no good contour found
+
+This combines YOLO's robustness with classical computer vision's precision!
 
 ## Performance Optimization
 
 ### For Maximum FPS:
 
-1. **Use GPU**: Set `device: "cuda"` in config
-2. **Enable FP16**: Set `half_precision: true`
-3. **Use Nano Model**: Set `size: "n"` for fastest inference
-4. **Reduce Image Size**: Lower `image_size` to 320 or 416
+1. **Use GPU**: Change `device='cpu'` to `device='cuda'` in `detect_cells_in_roi()`
+2. **Reduce Image Size**: Lower `imgsz` from 640 to 320 or 416
+3. **Increase Confidence**: Higher `conf` threshold = fewer detections = faster
+4. **Use Smaller ROI**: Smaller ROI = less pixels to process
 
 ### For Best Accuracy:
 
-1. **Use Larger Model**: Set `size: "m"` or `size: "l"`
-2. **Increase Image Size**: Set `image_size: 1280`
-3. **Use Custom Weights**: Train on your specific cell types
-4. **Adjust Thresholds**: Fine-tune confidence and IoU
+1. **Use Custom Trained Model**: Train on your specific cell types
+2. **Increase Image Size**: Set `imgsz=1280` for better small object detection
+3. **Lower Confidence**: Decrease `conf` to 0.1-0.2 for more detections
+4. **Adjust IoU**: Fine-tune `iou` threshold for overlapping cells
 
 ## Custom Model Training
 
@@ -142,9 +174,10 @@ To use a custom trained YOLO11 model:
 ## Troubleshooting
 
 ### Camera Not Found
-- Check ToupCam is connected
+- Check ToupCam is connected via USB
 - Verify SDK path is correct
-- Try reconnecting camera
+- Click **Reconnect Camera** button to retry connection
+- Try unplugging and replugging the camera, then click Reconnect
 
 ### Low FPS
 - Enable GPU acceleration

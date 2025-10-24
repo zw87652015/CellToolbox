@@ -1,0 +1,20 @@
+{
+  "video_path": "d:\\Documents\\Recordings\\251020112157.mp4",
+  "total_frames": 22615,
+  "processed_frames": 282,
+  "total_detections": 2691,
+  "avg_detections_per_frame": 9.542553191489361,
+  "roi": {
+    "x": 991,
+    "y": 437,
+    "width": 701,
+    "height": 565
+  },
+  "timestamp": "2025-10-23T11:22:26.642403",
+  "avg_confidence": 0.8315282713210702,
+  "avg_cell_width": 94.58281332106007,
+  "avg_cell_height": 91.93757034579603,
+  "avg_cell_area": 8867.218989785832,
+  "min_cell_size": 40.949981689453125,
+  "max_cell_size": 178.4998779296875
+}

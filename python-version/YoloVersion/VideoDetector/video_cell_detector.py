@@ -52,12 +52,17 @@ class VideoCellDetector:
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file"""
         try:
+            # Resolve config path relative to script directory if not absolute
+            if not os.path.isabs(config_path):
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                config_path = os.path.join(script_dir, config_path)
+            
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
             logger.info(f"Configuration loaded from {config_path}")
             return config
         except FileNotFoundError:
-            logger.warning(f"Config file not found, using defaults")
+            logger.warning(f"Config file not found at {config_path}, using defaults")
             return self._get_default_config()
         except Exception as e:
             logger.error(f"Failed to load config: {e}")
